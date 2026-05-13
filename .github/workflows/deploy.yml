@@ -1,0 +1,32 @@
+name: Deploy
+
+on:
+  push:
+    branches: ['dev']
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    container: pandoc/latex
+
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install mustache (to update the date)
+        run: apk add ruby && gem install mustache
+      - name: creates output
+        run: sh ./build.sh
+      - name: Pushes to another repository
+        id: push_directory
+        uses: cpina/github-action-push-to-another-repository@main
+        env:
+          API_TOKEN_GITHUB: ${{ secrets.AUTO_ACTIONS }}
+        with:
+          source-directory: 'output'
+          destination-github-username: HongYeonLee #개인 레포 소유자의 username
+          destination-repository-name: 2026-ACC-EWHA-PAYLINKER-FE # 포크 뜬 개인 레포 이름
+          user-email: ${{ secrets.OFFICIAL_ACCOUNT_EMAIL }} # 개인 계정 이메일
+          commit-message: ${{ github.event.commits[0].message }}
+          target-branch: main
+      - name: Test get variable exported by push-to-another-repository
+        run: echo $DESTINATION_CLONED_DIRECTORY
