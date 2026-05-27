@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
-import { api } from '../../../shared/api/client';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { campaignApi } from './api';
 import { PageHeader } from '../common/PageHeader';
 import {
   ApiBadge,
   ApiBadgeGroup,
+  Badge,
   Button,
   Card,
   CardBody,
@@ -16,131 +16,212 @@ import {
   Icon,
   Input,
   Modal,
+  Pill,
+  Switch,
+  Textarea,
   toast,
 } from '../../../shared/ui';
+import { FileDrop } from '../../../shared/ui/FileDrop';
+import {
+  CHECK_ITEM_TYPE_LABEL,
+  MATCH_STATUS_LABEL,
+  SEND_FAILURE_REASON_LABEL,
+  VALIDATION_STATUS_LABEL,
+} from '../../../shared/constants/status';
+import { CampaignStatusBadge } from '../../../shared/ui/StatusBadge';
 import { ApiError } from '../../../shared/api/client';
 import { formatNumber } from '../../../shared/lib/format';
-import type { CampaignDetailResponse, HrSyncResponse } from '../../../shared/api/types';
+import type {
+  CampaignCreateRequest,
+  CampaignDetailResponse,
+  CampaignFinalReviewResponse,
+  CampaignUpdateRequest,
+  RecipientUploadType,
+} from '../../../shared/api/types';
 
-type WizardStep = 'select' | 'verify' | 'options' | 'review' | 'sending';
-type SendTiming = 'NOW' | 'SCHEDULED' | 'RECURRING';
-type TargetGroup = 'ALL' | 'DEPARTMENT' | 'SELECTED';
+type WizardStep = 'basic' | 'recipients' | 'documents' | 'review' | 'schedule';
 
 const STEPS: Array<{ key: WizardStep; label: string }> = [
-  { key: 'select', label: '직원 명단 선택' },
-  { key: 'verify', label: '명단 확인' },
-  { key: 'options', label: '발송 옵션' },
-  { key: 'review', label: '검토' },
-  { key: 'sending', label: '발송' },
+  { key: 'basic', label: '캠페인 정보' },
+  { key: 'recipients', label: '수신자 업로드' },
+  { key: 'documents', label: '명세서 업로드' },
+  { key: 'review', label: '최종 확인' },
+  { key: 'schedule', label: '발송' },
 ];
+
+const UPLOAD_TYPES: Array<{ value: RecipientUploadType; label: string }> = [
+  { value: 'FULL_REPLACE', label: '전체 교체' },
+  { value: 'APPEND', label: '추가' },
+];
+
+const DOCUMENT_TYPES = ['PDF', 'HTML', 'JSON'] as const;
+const MATCH_KEYS = ['employeeNo', 'email'] as const;
 
 export function CampaignNewPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
-
-  const [step, setStep] = useState<WizardStep>('select');
-  const [targetGroup, setTargetGroup] = useState<TargetGroup>('ALL');
-  const [selectedDept, setSelectedDept] = useState<string | null>(null);
-  const [emailSubject, setEmailSubject] = useState('');
-  const [sendTiming, setSendTiming] = useState<SendTiming>('NOW');
-  const [scheduledAt, setScheduledAt] = useState('');
+  const [step, setStep] = useState<WizardStep>('basic');
   const [campaign, setCampaign] = useState<CampaignDetailResponse | null>(null);
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const [emailSubjectError, setEmailSubjectError] = useState('');
 
-  const hrQuery = useQuery({
-    queryKey: ['hr-employees', selectedDept],
-    queryFn: () =>
-      api.get<HrSyncResponse>('/hr/employees', {
-        query: selectedDept ? { department: selectedDept } : undefined,
-      }),
-    staleTime: 5 * 60 * 1000,
+  const [form, setForm] = useState<CampaignCreateRequest>({
+    campaignName: '',
+    emailSubject: '',
+    emailDescription: '',
+    linkTtlHours: 48,
+    allowOneTimeLink: true,
+    allowResendRequest: true,
+    resendRequestLimit: 1,
+  });
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [scheduledSendAt, setScheduledSendAt] = useState('');
+  const [uploadType, setUploadType] = useState<RecipientUploadType>('FULL_REPLACE');
+  const [recipientBatchId, setRecipientBatchId] = useState<string | null>(null);
+  const [documentType, setDocumentType] =
+    useState<(typeof DOCUMENT_TYPES)[number]>('PDF');
+  const [matchKey, setMatchKey] = useState<(typeof MATCH_KEYS)[number]>('employeeNo');
+
+  const existingCampaignId = searchParams.get('campaignId') ?? campaign?.campaignId ?? null;
+
+  const detailQuery = useQuery({
+    queryKey: ['campaign', existingCampaignId],
+    queryFn: () => campaignApi.detail(existingCampaignId!),
+    enabled: !!existingCampaignId,
   });
 
-  const hrData = hrQuery.data;
+  const recipientValidationQuery = useQuery({
+    queryKey: ['campaign-validation', existingCampaignId, recipientBatchId],
+    queryFn: () => campaignApi.validateUpload(existingCampaignId!, recipientBatchId!),
+    enabled: !!existingCampaignId && !!recipientBatchId,
+    retry: false,
+  });
+  const matchesQuery = useQuery({
+    queryKey: ['campaign-matches', existingCampaignId],
+    queryFn: () => campaignApi.documentMatches(existingCampaignId!),
+    enabled: !!existingCampaignId && (step === 'documents' || step === 'review'),
+    retry: false,
+  });
+  const finalReviewQuery = useQuery({
+    queryKey: ['campaign-final-review', existingCampaignId],
+    queryFn: () => campaignApi.finalReview(existingCampaignId!),
+    enabled: !!existingCampaignId && step === 'review',
+    retry: false,
+  });
 
   const createMutation = useMutation({
-    mutationFn: () =>
-      campaignApi.create({
-        campaignName: emailSubject.slice(0, 20) || '새 발송',
-        emailSubject,
-        linkTtlHours: 48,
-        allowOneTimeLink: true,
-        allowResendRequest: true,
-        resendRequestLimit: 1,
-        scheduledSendAt: sendTiming === 'SCHEDULED' && scheduledAt
-          ? new Date(scheduledAt).toISOString()
-          : undefined,
-      }),
+    mutationFn: (body: CampaignCreateRequest) => campaignApi.create(body),
+    onSuccess: (created) => {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.set('campaignId', created.campaignId);
+        return next;
+      });
+      // detailQuery refetch will fill in the full CampaignDetailResponse
+      queryClient.invalidateQueries({ queryKey: ['campaign', created.campaignId] });
+      setStep('recipients');
+      toast.success('캠페인이 생성되었습니다', '수신자 업로드 단계로 이동합니다.');
+    },
     onError: (err: unknown) => {
       const message = err instanceof ApiError ? err.message : '캠페인 생성에 실패했습니다.';
       toast.error('캠페인 생성 실패', message);
     },
   });
 
+  const updateMutation = useMutation({
+    mutationFn: (body: CampaignUpdateRequest) =>
+      campaignApi.update(existingCampaignId!, body),
+    onSuccess: (updated) => {
+      setCampaign(updated);
+      toast.success('캠페인 정보를 저장했습니다.');
+    },
+  });
+
+  const uploadRecipientsMutation = useMutation({
+    mutationFn: ({ file }: { file: File }) =>
+      campaignApi.uploadRecipients(existingCampaignId!, file, uploadType),
+    onSuccess: (res) => {
+      setRecipientBatchId(res.uploadBatchId);
+      toast.success(
+        '수신자 데이터가 업로드되었습니다.',
+        `정상 ${res.validRowCount}건 · 오류 ${res.errorRowCount}건 · 중복 ${res.duplicateRowCount}건`,
+      );
+      queryClient.invalidateQueries({ queryKey: ['campaign', existingCampaignId] });
+    },
+    onError: (err: unknown) => {
+      const message = err instanceof ApiError ? err.message : '업로드에 실패했습니다.';
+      toast.error('업로드 실패', message);
+    },
+  });
+  const uploadDocumentsMutation = useMutation({
+    mutationFn: ({ file }: { file: File }) =>
+      campaignApi.uploadDocuments(existingCampaignId!, file, documentType, matchKey),
+    onSuccess: (res) => {
+      toast.success(
+        '명세서 데이터가 업로드되었습니다.',
+        `매칭 완료 ${res.matchedCount}건 · 미매칭 수신자 ${res.unmatchedRecipientCount}건`,
+      );
+      queryClient.invalidateQueries({ queryKey: ['campaign-matches', existingCampaignId] });
+      queryClient.invalidateQueries({ queryKey: ['campaign-final-review', existingCampaignId] });
+    },
+    onError: (err: unknown) => {
+      const message = err instanceof ApiError ? err.message : '업로드에 실패했습니다.';
+      toast.error('업로드 실패', message);
+    },
+  });
+
   const sendMutation = useMutation({
-    mutationFn: (id: string) => campaignApi.send(id),
+    mutationFn: () => campaignApi.send(existingCampaignId!),
     onSuccess: () => {
+      toast.success('발송 요청이 접수되었습니다', '발송 진행 상황은 캠페인 상세에서 확인하세요.');
       queryClient.invalidateQueries({ queryKey: ['campaigns'] });
+      navigate(`/admin/campaigns/${existingCampaignId}`);
     },
     onError: (err: unknown) => {
       const message = err instanceof ApiError ? err.message : '발송에 실패했습니다.';
       toast.error('발송 실패', message);
     },
   });
-
   const scheduleMutation = useMutation({
-    mutationFn: ({ id, iso }: { id: string; iso: string }) =>
-      campaignApi.schedule(id, iso),
+    mutationFn: (iso: string) => campaignApi.schedule(existingCampaignId!, iso),
+    onSuccess: () => {
+      toast.success('예약 발송이 등록되었습니다.');
+      queryClient.invalidateQueries({ queryKey: ['campaigns'] });
+      navigate('/admin/scheduled');
+    },
     onError: (err: unknown) => {
       const message = err instanceof ApiError ? err.message : '예약 발송 등록에 실패했습니다.';
       toast.error('예약 실패', message);
     },
   });
 
+  const validateBasic = () => {
+    const e: Record<string, string> = {};
+    if (!form.campaignName.trim()) e.campaignName = '캠페인명을 입력해 주세요.';
+    if (form.campaignName.length > 20) e.campaignName = '캠페인명은 20자 이하여야 합니다.';
+    if (!form.emailSubject.trim()) e.emailSubject = '이메일 제목을 입력해 주세요.';
+    if (
+      form.linkTtlHours !== undefined &&
+      (form.linkTtlHours <= 0 || form.linkTtlHours > 720)
+    )
+      e.linkTtlHours = '링크 유효 시간은 1~720시간 사이여야 합니다.';
+    setErrors(e);
+    return Object.keys(e).length === 0;
+  };
+
   const stepIndex = STEPS.findIndex((s) => s.key === step);
 
-  const targetCount =
-    targetGroup === 'ALL'
-      ? (hrData?.activeCount ?? 510)
-      : targetGroup === 'DEPARTMENT' && selectedDept
-        ? (hrData?.departments?.find((d) => d.name === selectedDept)?.count ?? 0)
-        : hrData?.activeCount ?? 0;
-
-  const handleSendNow = async () => {
-    setConfirmOpen(false);
-    try {
-      const created = await createMutation.mutateAsync();
-      setCampaign(created as unknown as CampaignDetailResponse);
-      setStep('sending');
-      const detail = await campaignApi.detail(created.campaignId);
-      setCampaign(detail);
-      await sendMutation.mutateAsync(created.campaignId);
-    } catch {
-      // handled in mutation onError
-    }
-  };
-
-  const handleSchedule = async () => {
-    if (!scheduledAt) { toast.warn('예약 시각', '날짜와 시간을 입력해 주세요.'); return; }
-    try {
-      const created = await createMutation.mutateAsync();
-      await scheduleMutation.mutateAsync({
-        id: created.campaignId,
-        iso: new Date(scheduledAt).toISOString(),
-      });
-      toast.success('예약 발송이 등록되었습니다.');
-      navigate('/admin/scheduled');
-    } catch {
-      // handled
-    }
-  };
+  const totalRecipients =
+    recipientValidationQuery.data?.validRowCount ??
+    detailQuery.data?.totalRecipientCount ??
+    0;
+  const matchedCount = matchesQuery.data?.matchedCount ?? 0;
+  const unmatchedCount = matchesQuery.data?.unmatchedRecipientCount ?? 0;
 
   return (
     <div>
       <PageHeader
         title="새 발송"
-        description="HR 시스템과 연결되어 직원 명단이 자동으로 채워집니다. 본인만 볼 수 있는 보안 링크가 발송됩니다."
+        description="캠페인 정보 → 수신자 업로드 → 명세서 업로드 → 최종 확인 → 발송 순서로 진행합니다."
         breadcrumbs={[
           { label: '관리자' },
           { label: '발송 이력', to: '/admin/campaigns' },
@@ -148,9 +229,12 @@ export function CampaignNewPage() {
         ]}
         apiBadges={
           <ApiBadgeGroup>
-            <ApiBadge method="GET" path="/api/hr/employees" note="HR 직원 명단" />
             <ApiBadge method="POST" path="/api/campaigns" note="CAM-002 생성" />
-            <ApiBadge method="POST" path="/api/campaigns/:id/send" note="SND-001" />
+            <ApiBadge method="POST" path="/api/campaigns/:id/recipients/upload" note="RCP-001" />
+            <ApiBadge method="POST" path="/api/campaigns/:id/documents/upload" note="DOC-001" />
+            <ApiBadge method="GET" path="/api/campaigns/:id/final-review" note="발송 전 검토" />
+            <ApiBadge method="POST" path="/api/campaigns/:id/send" note="SND-001 (BE 자리표시자)" />
+            <ApiBadge method="PATCH" path="/api/campaigns/:id/schedule" note="RSV-001 예약" />
           </ApiBadgeGroup>
         }
       />
@@ -158,33 +242,28 @@ export function CampaignNewPage() {
       {/* Stepper */}
       <Card className="mb-5">
         <CardBody>
-          <ol className="flex gap-0 overflow-x-auto">
+          <ol className="grid grid-cols-2 gap-3 sm:grid-cols-5">
             {STEPS.map((s, i) => {
               const isActive = s.key === step;
               const isDone = i < stepIndex;
               return (
-                <li key={s.key} className="flex flex-1 items-center">
-                  <div className="flex items-center gap-2 whitespace-nowrap">
-                    <span
-                      className={`flex size-8 shrink-0 items-center justify-center rounded-full text-[12px] font-bold ${
-                        isActive
-                          ? 'bg-mint-500 text-navy-900'
-                          : isDone
-                            ? 'bg-mint-100 text-mint-700'
-                            : 'bg-surface-sunken text-ink-4'
-                      }`}
-                    >
-                      {isDone ? <Icon.Check size={13} /> : i + 1}
-                    </span>
-                    <span
-                      className={`text-[12.5px] font-medium ${isActive ? 'text-ink-1' : isDone ? 'text-mint-600' : 'text-ink-4'}`}
-                    >
-                      {s.label}
-                    </span>
-                  </div>
-                  {i < STEPS.length - 1 && (
-                    <div className={`mx-3 h-px flex-1 ${isDone ? 'bg-mint-200' : 'bg-border'}`} />
-                  )}
+                <li key={s.key} className="flex items-center gap-2.5">
+                  <span
+                    className={`flex size-9 items-center justify-center rounded-full text-[13px] font-bold ${
+                      isActive
+                        ? 'bg-mint-500 text-navy-900'
+                        : isDone
+                          ? 'bg-mint-100 text-mint-700'
+                          : 'bg-surface-sunken text-ink-4'
+                    }`}
+                  >
+                    {isDone ? <Icon.Check size={14} /> : i + 1}
+                  </span>
+                  <span
+                    className={`text-[12.5px] font-medium ${isActive ? 'text-ink-1' : 'text-ink-4'}`}
+                  >
+                    {s.label}
+                  </span>
                 </li>
               );
             })}
@@ -192,458 +271,588 @@ export function CampaignNewPage() {
         </CardBody>
       </Card>
 
-      {/* Step 1: 직원 명단 선택 */}
-      {step === 'select' && (
+      {step === 'basic' ? (
         <Card>
-          <CardHeader
-            title="직원 명단 선택"
-            subtitle="HR 시스템과 자동 연동되어 항상 최신 명단을 사용합니다. 발송 대상 그룹을 선택해 주세요."
-          />
-          <CardBody className="space-y-5">
-            {/* HR 연결 상태 */}
-            <div className="flex items-center gap-3 rounded-lg border border-mint-200 bg-mint-50 px-4 py-3">
-              <span className="flex size-7 items-center justify-center rounded-full bg-mint-500 text-white">
-                <Icon.Check size={13} />
-              </span>
-              <div>
-                <div className="text-[12.5px] font-semibold text-mint-800">HR 시스템 연결됨</div>
-                <div className="text-[11.5px] text-mint-600">
-                  마지막 동기화: 오늘 오전 8:42 · 전체 직원 512명 (활성 510명, 비활성 2명 제외)
-                </div>
-              </div>
-            </div>
+          <CardHeader title="캠페인 기본 정보" subtitle="발송에 필요한 기본 정보를 입력합니다." />
+          <CardBody className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <Field label="캠페인명" required error={errors.campaignName} hint="최대 20자">
+              <Input
+                value={form.campaignName}
+                onChange={(e) => setForm((f) => ({ ...f, campaignName: e.target.value }))}
+                placeholder="2026년 5월 급여명세서"
+              />
+            </Field>
+            <Field label="링크 유효 시간 (h)" required error={errors.linkTtlHours}>
+              <Input
+                type="number"
+                value={form.linkTtlHours ?? 48}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, linkTtlHours: Number(e.target.value) || 48 }))
+                }
+              />
+            </Field>
+            <Field label="이메일 제목" required error={errors.emailSubject} className="md:col-span-2">
+              <Input
+                value={form.emailSubject}
+                onChange={(e) => setForm((f) => ({ ...f, emailSubject: e.target.value }))}
+                placeholder="[Paylinker] 2026년 5월 급여명세서가 발행되었습니다"
+              />
+            </Field>
+            <Field label="발송 설명" className="md:col-span-2">
+              <Textarea
+                rows={4}
+                value={form.emailDescription ?? ''}
+                onChange={(e) => setForm((f) => ({ ...f, emailDescription: e.target.value }))}
+                placeholder="이메일 본문에 포함될 안내 문구를 입력합니다."
+              />
+            </Field>
 
-            {/* 발송 대상 그룹 선택 */}
-            <div>
-              <div className="mb-2 text-[12.5px] font-medium text-ink-2">발송 대상 그룹</div>
-              <div className="space-y-2">
-                {[
-                  { value: 'ALL' as TargetGroup, label: '전체 직원', desc: '활성 상태인 모든 직원에게 일괄 발송', count: '510' },
-                  { value: 'DEPARTMENT' as TargetGroup, label: '부서별 발송', desc: '특정 부서/팀을 선택해서 발송', count: selectedDept ? String(hrData?.departments?.find((d) => d.name === selectedDept)?.count ?? '—') : '— 선택' },
-                  { value: 'SELECTED' as TargetGroup, label: '직접 선택', desc: '검색해서 직원을 개별 선택', count: '— 선택' },
-                ].map((opt) => (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    onClick={() => setTargetGroup(opt.value)}
-                    className={`flex w-full items-center gap-4 rounded-lg border px-4 py-3.5 text-left transition ${
-                      targetGroup === opt.value
-                        ? 'border-mint-400 bg-mint-50'
-                        : 'border-border bg-white hover:border-mint-200 hover:bg-mint-50/40'
-                    }`}
-                  >
-                    <div
-                      className={`flex size-5 shrink-0 items-center justify-center rounded-full border-2 ${
-                        targetGroup === opt.value ? 'border-mint-500 bg-mint-500' : 'border-border-strong'
-                      }`}
-                    >
-                      {targetGroup === opt.value && (
-                        <span className="size-2 rounded-full bg-white" />
-                      )}
-                    </div>
-                    <div className="flex-1">
-                      <div className="text-[13px] font-medium text-ink-1">{opt.label}</div>
-                      <div className="text-[11.5px] text-ink-4">{opt.desc}</div>
-                    </div>
-                    <div className="text-right">
-                      <span className="num text-[16px] font-medium text-ink-1">{opt.count}</span>
-                      {opt.count !== '— 선택' && <span className="ml-1 text-[11px] text-ink-4">명</span>}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* 부서 선택 드롭다운 */}
-            {targetGroup === 'DEPARTMENT' && (
-              <Field label="부서 선택" required>
-                <select
-                  value={selectedDept ?? ''}
-                  onChange={(e) => setSelectedDept(e.target.value || null)}
-                  className="h-9 w-full rounded-md border border-border-strong bg-white px-3 text-[12.5px] focus:border-mint-500 focus:outline-none"
-                >
-                  <option value="">부서를 선택하세요</option>
-                  {(hrData?.departments ?? [
-                    { name: '개발팀', count: 142 }, { name: '마케팅팀', count: 87 },
-                    { name: '영업팀', count: 96 }, { name: '디자인팀', count: 41 },
-                    { name: '인사팀', count: 18 }, { name: '재무팀', count: 32 },
-                    { name: '운영팀', count: 64 }, { name: '기획팀', count: 30 },
-                  ]).map((d) => (
-                    <option key={d.name} value={d.name}>{d.name} ({d.count}명)</option>
-                  ))}
-                </select>
-              </Field>
-            )}
-
-            {/* 전체 직원 구성 */}
-            {targetGroup === 'ALL' && (
-              <div>
-                <div className="mb-2 text-[12px] font-medium text-ink-3">전체 직원 구성</div>
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                  {(hrData?.departments ?? [
-                    { name: '개발팀', count: 142 }, { name: '마케팅팀', count: 87 },
-                    { name: '영업팀', count: 96 }, { name: '디자인팀', count: 41 },
-                    { name: '인사팀', count: 18 }, { name: '재무팀', count: 32 },
-                    { name: '운영팀', count: 64 }, { name: '기획팀', count: 30 },
-                  ]).map((dept) => (
-                    <div
-                      key={dept.name}
-                      className="flex items-center justify-between rounded-md border border-border bg-surface-sunken px-3 py-2"
-                    >
-                      <span className="text-[11.5px] text-ink-3">{dept.name}</span>
-                      <span className="num text-[13px] font-medium text-ink-1">{dept.count}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+            <ToggleField
+              label="일회용 링크 적용"
+              hint="확인 후 동일 링크로 다시 열람할 수 없습니다."
+              checked={!!form.allowOneTimeLink}
+              onChange={(v) => setForm((f) => ({ ...f, allowOneTimeLink: v }))}
+            />
+            <ToggleField
+              label="수신자 재전송 요청 허용"
+              hint="수신자가 운영자에게 새 링크를 요청할 수 있습니다."
+              checked={!!form.allowResendRequest}
+              onChange={(v) => setForm((f) => ({ ...f, allowResendRequest: v }))}
+            />
+            <Field label="재전송 요청 제한 (회)">
+              <Input
+                type="number"
+                value={form.resendRequestLimit ?? 1}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, resendRequestLimit: Number(e.target.value) || 1 }))
+                }
+              />
+            </Field>
           </CardBody>
           <CardFooter>
             <Button variant="ghost" onClick={() => navigate('/admin/campaigns')}>
               취소
             </Button>
             <Button
-              onClick={() => setStep('verify')}
-              disabled={targetGroup === 'DEPARTMENT' && !selectedDept}
+              onClick={() => {
+                if (!validateBasic()) return;
+                if (existingCampaignId) {
+                  const updateBody: CampaignUpdateRequest = {
+                    campaignName: form.campaignName,
+                    emailSubject: form.emailSubject,
+                    emailDescription: form.emailDescription,
+                    linkTtlHours: form.linkTtlHours,
+                    allowOneTimeLink: form.allowOneTimeLink,
+                    allowResendRequest: form.allowResendRequest,
+                    resendRequestLimit: form.resendRequestLimit,
+                  };
+                  updateMutation.mutate(updateBody, {
+                    onSuccess: () => setStep('recipients'),
+                  });
+                } else {
+                  createMutation.mutate(form);
+                }
+              }}
+              loading={createMutation.isPending || updateMutation.isPending}
               iconRight={<Icon.ChevronRight size={14} />}
             >
               다음
             </Button>
           </CardFooter>
         </Card>
-      )}
+      ) : null}
 
-      {/* Step 2: 명단 확인 */}
-      {step === 'verify' && (
+      {step === 'recipients' && existingCampaignId ? (
         <Card>
           <CardHeader
-            title="명단 확인"
-            subtitle={`${targetGroup === 'ALL' ? '전체 직원' : selectedDept} ${targetCount}명 (활성) · HR 시스템에서 자동 추출 · 오류 0건`}
-            apiBadge={<ApiBadge method="GET" path="/api/hr/employees" note="HR 직원 명단" />}
+            title="수신자 데이터 업로드"
+            subtitle="CSV 또는 엑셀 파일을 업로드해 발송 대상자를 등록합니다."
+            apiBadge={<ApiBadge method="POST" path="/api/campaigns/:id/recipients/upload" note="RCP-001 / RCP-002" />}
           />
           <CardBody className="space-y-4">
-            {/* 요약 stats */}
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              {[
-                { label: '발송 대상', value: targetCount, unit: '명', tone: 'mint' },
-                { label: '자동 제외', value: 2, unit: '비활성 계정', tone: 'ink' },
-                { label: '이메일 누락', value: 0, unit: '검증 통과', tone: 'ink' },
-                { label: '마지막 동기화', value: '오늘 08:42', unit: 'HR 시스템', tone: 'ink' },
-              ].map((stat) => (
-                <div key={stat.label} className="rounded-md border border-border bg-white px-4 py-3">
-                  <div className="text-[10.5px] font-medium uppercase tracking-[0.1em] text-ink-4">{stat.label}</div>
-                  <div className={`mt-1 num text-[20px] font-semibold ${stat.tone === 'mint' ? 'text-mint-600' : 'text-ink-1'}`}>
-                    {stat.value}
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="text-[12px] font-medium text-ink-3">업로드 방식</span>
+              <Pill items={UPLOAD_TYPES} value={uploadType} onChange={setUploadType} />
+            </div>
+            <FileDrop
+              accept=".csv,.xlsx,.xls"
+              hint="CSV / XLSX / XLS · 사번, 성명, 부서, 이메일 컬럼 포함"
+              onFile={(file) => uploadRecipientsMutation.mutate({ file })}
+            />
+            {recipientValidationQuery.data ? (
+              <div className="rounded-lg border border-border bg-surface-sunken p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="text-[12.5px] font-medium text-ink-1">
+                      uploadBatchId: <span className="num text-ink-3">{recipientValidationQuery.data.uploadBatchId}</span>
+                    </div>
+                    <div className="mt-0.5 text-[11px] text-ink-4">
+                      행 {recipientValidationQuery.data.totalRowCount}건 처리
+                    </div>
                   </div>
-                  <div className="text-[10.5px] text-ink-4">{stat.unit}</div>
+                  <div className="flex gap-4">
+                    <Statistic
+                      label="정상"
+                      value={recipientValidationQuery.data.validRowCount}
+                      tone="success"
+                    />
+                    <Statistic
+                      label="중복"
+                      value={recipientValidationQuery.data.duplicateRowCount}
+                      tone="warn"
+                    />
+                    <Statistic
+                      label="오류"
+                      value={recipientValidationQuery.data.errorRowCount}
+                      tone="danger"
+                    />
+                  </div>
                 </div>
-              ))}
-            </div>
-
-            {/* 직원 목록 테이블 */}
-            <div className="overflow-hidden rounded-lg border border-border">
-              <table className="w-full text-[12.5px]">
-                <thead className="border-b border-border bg-surface-sunken">
-                  <tr>
-                    {['#', '이름', '이메일', '부서', '직급', '상태'].map((h) => (
-                      <th key={h} className="px-3 py-2.5 text-left font-medium text-ink-3">{h}</th>
+                {recipientValidationQuery.data.errors.length > 0 ? (
+                  <ul className="mt-3 space-y-1.5">
+                    {recipientValidationQuery.data.errors.map((err, idx) => (
+                      <li
+                        key={idx}
+                        className="rounded-md border border-danger-100 bg-danger-50 px-3.5 py-2.5 text-[12px] text-danger-600"
+                      >
+                        <strong className="num mr-1">행 {err.rowNumber}</strong>
+                        <span className="font-medium">{err.column}</span> · {err.message}
+                      </li>
                     ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {(hrData?.employees ?? [
-                    { employeeNo: '001', name: '김지원', email: 'jiwon.kim@acme.co.kr', department: '마케팅팀', jobTitle: '매니저', isActive: true, employeeId: '1' },
-                    { employeeNo: '002', name: '박서연', email: 'seoyeon.park@acme.co.kr', department: '개발팀', jobTitle: '시니어', isActive: true, employeeId: '2' },
-                    { employeeNo: '003', name: '이도현', email: 'dohyun.lee@acme.co.kr', department: '영업팀', jobTitle: '대리', isActive: true, employeeId: '3' },
-                    { employeeNo: '004', name: '최민준', email: 'minjun.choi@acme.co.kr', department: '디자인팀', jobTitle: '주임', isActive: true, employeeId: '4' },
-                    { employeeNo: '005', name: '정하윤', email: 'hayoon.jung@acme.co.kr', department: '인사팀', jobTitle: '매니저', isActive: true, employeeId: '5' },
-                  ]).slice(0, 8).map((emp) => (
-                    <tr key={emp.employeeId} className="border-b border-border last:border-0">
-                      <td className="num px-3 py-2.5 text-ink-4">{emp.employeeNo}</td>
-                      <td className="px-3 py-2.5 font-medium text-ink-1">{emp.name}</td>
-                      <td className="px-3 py-2.5 text-ink-3">{emp.email || <span className="text-danger-400">누락</span>}</td>
-                      <td className="px-3 py-2.5 text-ink-3">{emp.department}</td>
-                      <td className="px-3 py-2.5 text-ink-3">{emp.jobTitle}</td>
-                      <td className="px-3 py-2.5">
-                        <span className={`inline-flex rounded-full px-2 py-0.5 text-[10.5px] font-medium ${emp.isActive ? 'bg-mint-50 text-mint-700' : 'bg-surface-sunken text-ink-4'}`}>
-                          {emp.isActive ? '활성' : '비활성'}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {targetCount > 8 && (
-                <div className="border-t border-border bg-surface-sunken px-4 py-2.5 text-center text-[11.5px] text-ink-4">
-                  외 {formatNumber(targetCount - 8)}명 더 있음
+                  </ul>
+                ) : null}
+                <div className="mt-3 text-[11.5px] text-ink-4">
+                  검증 통과한 수신자만 발송 단계로 진행됩니다. 오류는 원본 데이터에서 수정 후 다시
+                  업로드해 주세요.
                 </div>
-              )}
-            </div>
+              </div>
+            ) : null}
           </CardBody>
           <CardFooter>
-            <Button variant="ghost" onClick={() => setStep('select')}>이전</Button>
-            <Button onClick={() => setStep('options')} iconRight={<Icon.ChevronRight size={14} />}>
+            <Button variant="ghost" onClick={() => setStep('basic')}>
+              이전
+            </Button>
+            <Button
+              onClick={() => setStep('documents')}
+              disabled={
+                !recipientValidationQuery.data || !recipientValidationQuery.data.canProceed
+              }
+              iconRight={<Icon.ChevronRight size={14} />}
+            >
               다음
             </Button>
           </CardFooter>
         </Card>
-      )}
+      ) : null}
 
-      {/* Step 3: 발송 옵션 */}
-      {step === 'options' && (
-        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-          <Card>
-            <CardHeader title="발송 옵션" />
-            <CardBody className="space-y-5">
-              <Field label="메일 제목" required error={emailSubjectError}>
-                <Input
-                  value={emailSubject}
-                  onChange={(e) => { setEmailSubject(e.target.value); setEmailSubjectError(''); }}
-                  placeholder="[ACME] 2026년 5월 급여 명세서 안내"
-                />
-              </Field>
-
-              <div>
-                <div className="mb-2 text-[12.5px] font-medium text-ink-2">언제 보낼까요?</div>
-                <div className="flex gap-2">
-                  {[
-                    { value: 'NOW' as SendTiming, label: '지금 바로' },
-                    { value: 'SCHEDULED' as SendTiming, label: '날짜·시간 지정' },
-                    { value: 'RECURRING' as SendTiming, label: '매월 반복' },
-                  ].map((opt) => (
-                    <button
-                      key={opt.value}
-                      type="button"
-                      onClick={() => setSendTiming(opt.value)}
-                      className={`rounded-md border px-3 py-2 text-[12.5px] font-medium transition ${
-                        sendTiming === opt.value
-                          ? 'border-mint-400 bg-mint-50 text-mint-700'
-                          : 'border-border bg-white text-ink-3 hover:border-mint-200'
-                      }`}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
-                {sendTiming === 'SCHEDULED' && (
-                  <div className="mt-3">
-                    <Input
-                      type="datetime-local"
-                      value={scheduledAt}
-                      onChange={(e) => setScheduledAt(e.target.value)}
-                    />
-                  </div>
-                )}
-              </div>
-
-              <div className="rounded-md border border-border bg-surface-sunken px-4 py-3">
-                <div className="flex items-center justify-between">
-                  <div className="text-[12.5px] font-medium text-ink-2">보안 링크 유효 기간</div>
-                  <div className="flex items-center gap-1.5">
-                    <Icon.Lock size={13} className="text-ink-4" />
-                    <span className="text-[12.5px] font-medium text-ink-3">2일 (고정)</span>
-                  </div>
-                </div>
-                <div className="mt-1 text-[11.5px] text-ink-4">
-                  보안 정책에 따라 2일로 고정됩니다. 미확인자에게는 자동 리마인드가 한 번 더 발송돼요.
-                </div>
-              </div>
-            </CardBody>
-            <CardFooter>
-              <Button variant="ghost" onClick={() => setStep('verify')}>이전</Button>
-              <Button
-                onClick={() => {
-                  if (!emailSubject.trim()) { setEmailSubjectError('메일 제목을 입력해 주세요.'); return; }
-                  setStep('review');
-                }}
-                iconRight={<Icon.ChevronRight size={14} />}
-              >
-                다음
-              </Button>
-            </CardFooter>
-          </Card>
-
-          {/* 이메일 미리보기 */}
-          <div>
-            <div className="mb-2 text-[12.5px] font-medium text-ink-3">이메일 미리보기</div>
-            <div className="rounded-lg border border-border bg-white">
-              <div className="border-b border-border px-4 py-3 space-y-1">
-                <div className="flex gap-3 text-[11.5px]">
-                  <span className="w-16 shrink-0 text-ink-4">보내는 사람</span>
-                  <span className="text-ink-2">ACME 인사팀 &lt;payroll@acme.co.kr&gt;</span>
-                </div>
-                <div className="flex gap-3 text-[11.5px]">
-                  <span className="w-16 shrink-0 text-ink-4">제목</span>
-                  <span className="font-medium text-ink-1">{emailSubject || '[ACME] 2026년 5월 급여 명세서 안내'}</span>
-                </div>
-              </div>
-              <div className="px-4 py-4 space-y-3 text-[12.5px] text-ink-2">
-                <p>안녕하세요, <strong>홍길동</strong>님.</p>
-                <p className="leading-relaxed">
-                  2026년 5월 급여 명세서가 준비되었습니다. 보안을 위해 본 메일에는 명세서 내용이
-                  포함되어 있지 않으며, 아래 보안 링크에서만 본인의 명세서를 확인하실 수 있습니다.
-                </p>
-                <div className="rounded-md bg-mint-500 px-4 py-2.5 text-center font-medium text-white">
-                  내 명세서 확인하기 →
-                </div>
-                <p className="text-[11px] text-ink-4">
-                  본 링크는 본인만 접근할 수 있으며, 발송 후 2일 동안 유효합니다.
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Step 4: 검토 */}
-      {step === 'review' && (
-        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-          <Card>
-            <CardHeader title="발송 요약" />
-            <CardBody>
-              <dl className="divide-y divide-border">
-                {[
-                  { label: '제목', value: emailSubject },
-                  { label: '대상자', value: `직원 ${formatNumber(targetCount)}명` },
-                  { label: '보내는 사람', value: 'ACME 인사팀 (payroll@acme.co.kr)' },
-                  { label: '발송 시점', value: sendTiming === 'NOW' ? '지금 바로' : sendTiming === 'SCHEDULED' ? scheduledAt || '—' : '매월 반복' },
-                  { label: '보안 링크 유효 기간', value: '2일 (고정)' },
-                  { label: '명단 출처', value: 'HR 시스템 자동 추출' },
-                ].map(({ label, value }) => (
-                  <div key={label} className="flex items-center gap-4 py-3 text-[12.5px]">
-                    <dt className="w-36 shrink-0 text-ink-4">{label}</dt>
-                    <dd className="font-medium text-ink-1">{value}</dd>
-                  </div>
-                ))}
-              </dl>
-            </CardBody>
-            <CardFooter>
-              <Button variant="ghost" onClick={() => setStep('options')}>이전</Button>
-              {sendTiming === 'SCHEDULED' ? (
-                <Button
-                  onClick={handleSchedule}
-                  loading={createMutation.isPending || scheduleMutation.isPending}
-                  iconLeft={<Icon.Calendar size={14} />}
-                >
-                  예약 등록
-                </Button>
-              ) : (
-                <Button
-                  onClick={() => setConfirmOpen(true)}
-                  loading={createMutation.isPending}
-                  iconLeft={<Icon.Send size={14} />}
-                >
-                  발송 시작
-                </Button>
-              )}
-            </CardFooter>
-          </Card>
-
-          {/* 안전 확인 */}
-          <Card>
-            <CardHeader title="안전 확인" subtitle="발송 전 마지막 점검" />
-            <CardBody>
-              <ul className="space-y-3">
-                {[
-                  '메일 본문에 급여 정보가 포함되지 않음',
-                  '각 직원에게 1회용 보안 링크가 발급됨',
-                  '보낸 사람 도메인 인증 완료 (스팸함 방지)',
-                  '발송 실패 시 자동으로 다시 시도 (최대 3회)',
-                  '모든 발송·열람 기록이 안전하게 저장됨',
-                ].map((item) => (
-                  <li key={item} className="flex items-center gap-3 text-[12.5px] text-ink-2">
-                    <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-mint-100">
-                      <Icon.Check size={11} className="text-mint-600" />
-                    </span>
-                    {item}
-                  </li>
-                ))}
-              </ul>
-            </CardBody>
-          </Card>
-        </div>
-      )}
-
-      {/* Step 5: 발송 완료 */}
-      {step === 'sending' && (
+      {step === 'documents' && existingCampaignId ? (
         <Card>
-          <CardBody className="py-10">
-            <div className="mx-auto max-w-md space-y-6 text-center">
-              <div className="text-[15px] font-semibold text-ink-1">
-                {sendMutation.isPending ? '발송 중…' : '발송 완료'}
-              </div>
-              <div className="text-[13px] text-ink-3">
-                {sendMutation.isPending
-                  ? `${formatNumber(targetCount)}명에게 메일을 보내고 있습니다.`
-                  : `${formatNumber(targetCount)}명 모두에게 메일을 보냈어요.`}
-              </div>
-
-              {/* 진행률 바 */}
-              <div className="space-y-1.5">
-                <div className="flex justify-between text-[11.5px] text-ink-4">
-                  <span>{formatNumber(targetCount)} / {formatNumber(targetCount)}명 처리됨</span>
-                  <span>100%</span>
-                </div>
-                <div className="h-2 w-full rounded-full bg-surface-sunken">
-                  <div className="h-2 rounded-full bg-mint-500 transition-all" style={{ width: sendMutation.isPending ? '60%' : '100%' }} />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-3">
-                {[
-                  { label: '발송 완료', value: sendMutation.isPending ? 0 : targetCount - 2, tone: 'mint' },
-                  { label: '처리 중', value: sendMutation.isPending ? targetCount : 0, tone: 'warn' },
-                  { label: '실패 (자동 재시도)', value: 2, tone: 'danger' },
-                ].map((s) => (
-                  <div key={s.label} className="rounded-md border border-border bg-white px-3 py-3 text-center">
-                    <div className={`num text-[20px] font-semibold ${s.tone === 'mint' ? 'text-mint-600' : s.tone === 'warn' ? 'text-warn-500' : 'text-danger-500'}`}>
-                      {formatNumber(s.value as number)}
+          <CardHeader
+            title="명세서 데이터 업로드"
+            subtitle="개별 PDF 또는 ZIP 파일을 업로드해 수신자별 명세서를 자동 매칭합니다."
+            apiBadge={<ApiBadge method="POST" path="/api/campaigns/:id/documents/upload" note="DOC-001 / DOC-002" />}
+          />
+          <CardBody className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="문서 형식">
+                <select
+                  value={documentType}
+                  onChange={(e) =>
+                    setDocumentType(e.target.value as (typeof DOCUMENT_TYPES)[number])
+                  }
+                  className="h-9 w-full rounded-md border border-border-strong bg-white px-3 text-[12.5px]"
+                >
+                  {DOCUMENT_TYPES.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="매칭 키">
+                <select
+                  value={matchKey}
+                  onChange={(e) => setMatchKey(e.target.value as (typeof MATCH_KEYS)[number])}
+                  className="h-9 w-full rounded-md border border-border-strong bg-white px-3 text-[12.5px]"
+                >
+                  {MATCH_KEYS.map((k) => (
+                    <option key={k} value={k}>
+                      {k}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+            <FileDrop
+              accept=".zip,.pdf,.html,.json"
+              hint="ZIP / PDF / HTML / JSON · 파일명 또는 메타 데이터로 수신자와 자동 매칭"
+              onFile={(file) => uploadDocumentsMutation.mutate({ file })}
+            />
+            {matchesQuery.data ? (
+              <div className="rounded-lg border border-border bg-surface-sunken p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="text-[12.5px] font-medium text-ink-1">매칭 결과</div>
+                    <div className="mt-0.5 text-[11px] text-ink-4">
+                      전체 {matchesQuery.data.totalRecipientCount}건 중 매칭 완료{' '}
+                      {matchesQuery.data.matchedCount}건 · 미매칭 {matchesQuery.data.unmatchedRecipientCount}건
                     </div>
-                    <div className="mt-0.5 text-[10.5px] text-ink-4">{s.label}</div>
-                    <div className="text-[10.5px] text-ink-3">명</div>
                   </div>
-                ))}
-              </div>
-
-              {!sendMutation.isPending && (
-                <div className="rounded-lg border border-mint-100 bg-mint-50 px-4 py-3 text-[12.5px] text-mint-700">
-                  <div className="font-semibold">발송이 끝났어요</div>
-                  <div className="mt-0.5">실시간으로 직원 확인 현황을 추적하고 있어요. 미열람자에게는 2일 후 자동으로 리마인드를 보낼 수 있습니다.</div>
                 </div>
-              )}
+                <ul className="mt-3 max-h-72 space-y-1.5 overflow-y-auto pr-1">
+                  {matchesQuery.data.items.slice(0, 30).map((m) => (
+                    <li
+                      key={m.campaignRecipientId}
+                      className="flex items-center justify-between rounded-md border border-border bg-white px-3.5 py-2.5 text-[12px]"
+                    >
+                      <div>
+                        <div className="font-medium text-ink-1">{m.recipientName}</div>
+                        <div className="text-[11px] text-ink-4">
+                          <span className="num">{m.matchKey}</span>
+                        </div>
+                      </div>
+                      <Badge
+                        tone={
+                          m.matchStatus === 'MATCHED'
+                            ? 'success'
+                            : m.matchStatus === 'DUPLICATE_MATCH'
+                              ? 'warn'
+                              : 'danger'
+                        }
+                        size="xs"
+                      >
+                        {MATCH_STATUS_LABEL[m.matchStatus] ?? m.matchStatus}
+                      </Badge>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </CardBody>
+          <CardFooter>
+            <Button variant="ghost" onClick={() => setStep('recipients')}>
+              이전
+            </Button>
+            <Button
+              onClick={() => setStep('review')}
+              disabled={!matchesQuery.data || !matchesQuery.data.canProceed}
+              iconRight={<Icon.ChevronRight size={14} />}
+            >
+              다음
+            </Button>
+          </CardFooter>
+        </Card>
+      ) : null}
 
-              {!sendMutation.isPending && campaign && (
-                <Button onClick={() => navigate(`/admin/campaigns/${campaign.campaignId}`)}>
-                  발송 현황 보기
-                </Button>
-              )}
+      {step === 'review' && existingCampaignId ? (
+        <ReviewStep
+          campaign={detailQuery.data}
+          review={finalReviewQuery.data}
+          totalRecipients={totalRecipients}
+          matched={matchedCount}
+          unmatched={unmatchedCount}
+          onPrev={() => setStep('documents')}
+          onSchedule={() => setStep('schedule')}
+          onSend={() => sendMutation.mutate()}
+          sending={sendMutation.isPending}
+        />
+      ) : null}
+
+      {step === 'schedule' && existingCampaignId ? (
+        <Card>
+          <CardHeader
+            title="예약 발송 설정"
+            subtitle="지정 시각에 자동으로 발송됩니다. (Asia/Seoul 기준)"
+            apiBadge={<ApiBadge method="PATCH" path="/api/campaigns/:id/schedule" note="RSV-001" />}
+          />
+          <CardBody className="space-y-3">
+            <Field
+              label="예약 시각"
+              hint="현재로부터 최소 5분 후 시점만 지정 가능합니다."
+              required
+            >
+              <Input
+                type="datetime-local"
+                value={scheduledSendAt}
+                onChange={(e) => setScheduledSendAt(e.target.value)}
+              />
+            </Field>
+            <div className="rounded-md border border-dashed border-border-strong bg-surface-sunken px-4 py-3 text-[11.5px] leading-relaxed text-ink-3">
+              <div className="font-medium text-ink-2">예약 시 유의 사항</div>
+              <ul className="mt-1 space-y-0.5">
+                <li>• 예약 발송은 운영자 콘솔의 1분 단위 스케줄러가 트리거합니다.</li>
+                <li>• 예약 상태에서는 수신자/명세서 데이터 추가 변경이 가능합니다.</li>
+                <li>• 예약 취소 시 일반 캠페인 상태로 되돌아갑니다.</li>
+              </ul>
             </div>
           </CardBody>
+          <CardFooter>
+            <Button variant="ghost" onClick={() => setStep('review')}>
+              이전
+            </Button>
+            <Button
+              onClick={() => {
+                if (!scheduledSendAt) {
+                  toast.warn('예약 시각', '예약 시각을 입력해 주세요.');
+                  return;
+                }
+                scheduleMutation.mutate(new Date(scheduledSendAt).toISOString());
+              }}
+              loading={scheduleMutation.isPending}
+              iconLeft={<Icon.Calendar size={14} />}
+            >
+              예약 등록
+            </Button>
+          </CardFooter>
         </Card>
-      )}
+      ) : null}
 
-      {/* 발송 확인 모달 */}
+      <SideHelp />
+    </div>
+  );
+}
+
+function ToggleField({
+  label,
+  hint,
+  checked,
+  onChange,
+}: {
+  label: string;
+  hint?: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-4 rounded-md border border-border bg-surface-sunken px-4 py-4">
+      <div className="min-w-0 flex-1">
+        <div className="text-[12.5px] font-medium text-ink-2">{label}</div>
+        {hint ? <div className="mt-1 text-[11.5px] text-ink-4">{hint}</div> : null}
+      </div>
+      <Switch checked={checked} onChange={onChange} aria-label={label} />
+    </div>
+  );
+}
+
+function Statistic({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone: 'success' | 'warn' | 'danger';
+}) {
+  const toneClass =
+    tone === 'success' ? 'text-mint-700' : tone === 'warn' ? 'text-warn-600' : 'text-danger-600';
+  return (
+    <div className="text-right">
+      <div className={`num text-[18px] font-medium ${toneClass}`}>{formatNumber(value)}</div>
+      <div className="text-[11px] text-ink-4">{label}</div>
+    </div>
+  );
+}
+
+function ReviewStep({
+  campaign,
+  review,
+  totalRecipients,
+  matched,
+  unmatched,
+  onPrev,
+  onSchedule,
+  onSend,
+  sending,
+}: {
+  campaign: CampaignDetailResponse | undefined;
+  review: CampaignFinalReviewResponse | undefined;
+  totalRecipients: number;
+  matched: number;
+  unmatched: number;
+  onPrev: () => void;
+  onSchedule: () => void;
+  onSend: () => void;
+  sending: boolean;
+}) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  if (!campaign) return null;
+
+  const canSend = review?.canSend ?? false;
+  const blockingIssues = review?.blockingIssues ?? [];
+
+  return (
+    <Card>
+      <CardHeader
+        title="발송 전 최종 확인"
+        subtitle="발송 요청 후에는 캠페인 정보를 수정할 수 없습니다."
+        apiBadge={<ApiBadge method="GET" path="/api/campaigns/:id/final-review" />}
+        actions={<CampaignStatusBadge status={campaign.status} />}
+      />
+      <CardBody className="space-y-4">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <ReviewRow label="캠페인명" value={campaign.campaignName} />
+          <ReviewRow label="이메일 제목" value={campaign.emailSubject} />
+          <ReviewRow
+            label="링크 유효 시간"
+            value={`${campaign.linkTtlHours}시간`}
+          />
+          <ReviewRow
+            label="옵션"
+            value={
+              <div className="flex flex-wrap gap-1.5">
+                {campaign.allowOneTimeLink ? (
+                  <Badge tone="brand" size="xs">일회용 링크</Badge>
+                ) : null}
+                {campaign.allowResendRequest ? (
+                  <Badge tone="neutral" size="xs">
+                    재전송 요청 {campaign.resendRequestLimit}회
+                  </Badge>
+                ) : null}
+              </div>
+            }
+          />
+          <ReviewRow
+            label="이메일 본문"
+            value={campaign.emailDescription || '-'}
+            full
+          />
+        </div>
+
+        <div className="grid grid-cols-3 gap-3">
+          <SummaryCard label="전체 수신자" value={totalRecipients} tone="neutral" />
+          <SummaryCard label="매칭 완료" value={matched} tone="success" />
+          <SummaryCard
+            label="매칭 오류"
+            value={unmatched}
+            tone={unmatched > 0 ? 'danger' : 'neutral'}
+          />
+        </div>
+
+        {blockingIssues.length > 0 ? (
+          <div className="rounded-lg border border-danger-100 bg-danger-50 px-4 py-3 text-[12px] text-danger-600">
+            <div className="font-medium">
+              <Icon.Alert size={13} className="-mt-0.5 mr-1.5 inline" />
+              발송할 수 없습니다.
+            </div>
+            <ul className="mt-1.5 space-y-0.5 pl-4 list-disc">
+              {blockingIssues.map((issue, idx) => (
+                <li key={idx}>{issue}</li>
+              ))}
+            </ul>
+          </div>
+        ) : (
+          <div className="rounded-lg border border-mint-100 bg-mint-50 px-4 py-3 text-[12px] text-mint-700">
+            <Icon.Check size={13} className="-mt-0.5 mr-1.5 inline" />
+            모든 항목이 매칭되었습니다. 발송을 진행할 수 있습니다.
+          </div>
+        )}
+      </CardBody>
+      <CardFooter>
+        <Button variant="ghost" onClick={onPrev}>
+          이전
+        </Button>
+        <Button variant="secondary" onClick={onSchedule} iconLeft={<Icon.Calendar size={14} />}>
+          예약 발송 설정
+        </Button>
+        <Button
+          onClick={() => setConfirmOpen(true)}
+          disabled={!canSend}
+          loading={sending}
+          iconLeft={<Icon.Send size={14} />}
+        >
+          지금 발송
+        </Button>
+      </CardFooter>
       <Modal
         open={confirmOpen}
         onClose={() => setConfirmOpen(false)}
         title="발송 요청을 진행할까요?"
-        description={`총 ${formatNumber(targetCount)}명의 직원에게 보안 링크가 발송됩니다.`}
+        description={`총 ${totalRecipients}명의 수신자에게 발송됩니다. 발송 후에는 캠페인 취소가 불가합니다.`}
         footer={
           <>
-            <Button variant="ghost" onClick={() => setConfirmOpen(false)}>취소</Button>
-            <Button onClick={handleSendNow} loading={createMutation.isPending || sendMutation.isPending}>
+            <Button variant="ghost" onClick={() => setConfirmOpen(false)}>
+              취소
+            </Button>
+            <Button
+              onClick={() => {
+                setConfirmOpen(false);
+                onSend();
+              }}
+              loading={sending}
+            >
               발송 시작
             </Button>
           </>
         }
       >
-        <div className="rounded-md border border-border bg-surface-sunken px-4 py-3 text-[12px] text-ink-3">
+        <div className="rounded-md border border-border bg-surface-sunken px-4 py-3 text-[12.5px] text-ink-3">
           <ul className="space-y-1">
             <li>• 발송은 비동기로 처리되며 진행률은 캠페인 상세에서 확인할 수 있습니다.</li>
-            <li>• 비활성 계정(2명)은 자동으로 제외됩니다.</li>
+            <li>• 영구 실패 사유(이메일 형식 오류, 차단, 스팸 신고)는 자동 재발송에서 제외됩니다.</li>
           </ul>
         </div>
       </Modal>
+    </Card>
+  );
+}
+
+function ReviewRow({
+  label,
+  value,
+  full,
+}: {
+  label: string;
+  value: React.ReactNode;
+  full?: boolean;
+}) {
+  return (
+    <div
+      className={`rounded-md border border-border bg-white px-4 py-3 ${full ? 'md:col-span-2' : ''}`}
+    >
+      <div className="text-[10.5px] font-medium uppercase tracking-[0.1em] text-ink-4">
+        {label}
+      </div>
+      <div className="mt-1 text-[12.5px] text-ink-1">{value}</div>
+    </div>
+  );
+}
+
+function SummaryCard({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone: 'success' | 'warn' | 'danger' | 'neutral';
+}) {
+  const toneClass =
+    tone === 'success'
+      ? 'text-mint-700'
+      : tone === 'warn'
+        ? 'text-warn-600'
+        : tone === 'danger'
+          ? 'text-danger-600'
+          : 'text-ink-2';
+  return (
+    <div className="rounded-md border border-border bg-white px-4 py-3 text-center">
+      <div className={`num text-[24px] font-medium ${toneClass}`}>{formatNumber(value)}</div>
+      <div className="mt-0.5 text-[11px] text-ink-4">{label}</div>
+    </div>
+  );
+}
+
+function SideHelp() {
+  return (
+    <div className="mt-5 rounded-lg border border-dashed border-border-strong bg-white px-4 py-3 text-[11.5px] leading-relaxed text-ink-3">
+      <div className="font-medium text-ink-2">발송 전 체크리스트</div>
+      <ul className="mt-1 space-y-0.5">
+        <li>• 수신자/명세서 데이터는 한 캠페인 내에서만 사용되며 발송 후 보존됩니다.</li>
+        <li>• 매칭 오류({Object.values(MATCH_STATUS_LABEL).filter((l) => l !== '매칭 완료').join(', ')})는 즉시 안내됩니다.</li>
+        <li>• 영구 실패(예: {SEND_FAILURE_REASON_LABEL.INVALID_EMAIL})는 SES suppression list에 따라 자동 제외됩니다.</li>
+        <li>• 발송 완료 후 미확인 수신자는 {CHECK_ITEM_TYPE_LABEL.UNVIEWED_RECIPIENT}에서 별도 관리됩니다.</li>
+        <li>• 발송 가능한 상태({VALIDATION_STATUS_LABEL.VALID})가 아닌 행은 자동으로 제외됩니다.</li>
+      </ul>
     </div>
   );
 }

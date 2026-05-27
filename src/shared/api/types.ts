@@ -414,36 +414,6 @@ export interface CampaignSendRequestResponse {
 }
 
 /* ────────────────────────────────────────────────────────────────────────────
- * HR 시스템 연동
- * ──────────────────────────────────────────────────────────────────────────── */
-export type HrTargetGroup = 'ALL' | 'DEPARTMENT' | 'SELECTED';
-
-export interface HrDepartment {
-  name: string;
-  count: number;
-}
-
-export interface HrEmployee {
-  employeeId: string;
-  employeeNo: string;
-  name: string;
-  email: string;
-  department: string;
-  jobTitle: string;
-  isActive: boolean;
-}
-
-export interface HrSyncResponse {
-  lastSyncAt: string;
-  totalCount: number;
-  activeCount: number;
-  inactiveCount: number;
-  noEmailCount: number;
-  departments: HrDepartment[];
-  employees: HrEmployee[];
-}
-
-/* ────────────────────────────────────────────────────────────────────────────
  * Recipient secure-link flow
  * ──────────────────────────────────────────────────────────────────────────── */
 /* ────────────────────────────────────────────────────────────────────────────

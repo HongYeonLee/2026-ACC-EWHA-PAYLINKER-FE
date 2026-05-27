@@ -10,7 +10,6 @@ import {
   MOCK_CAMPAIGNS,
   MOCK_CHECK_ITEMS,
   MOCK_DOCUMENT_MATCHES,
-  MOCK_HR_SYNC,
   MOCK_RECIPIENT_ROWS,
   MOCK_RESEND_REQUESTS,
   type MockRecipientRow,
@@ -931,20 +930,6 @@ get('/notifications/check-items', async ({ query }) => {
     pageSize,
     items: items.slice(start, start + pageSize),
   });
-});
-
-/* ────────────────────────────────────────────────────────────────────────────
- * HR 시스템 연동
- * ──────────────────────────────────────────────────────────────────────────── */
-get('/hr/employees', async ({ query }) => {
-  const dept = query.get('department');
-  const sync = structuredClone(MOCK_HR_SYNC);
-  if (dept) {
-    sync.employees = sync.employees.filter((e) => e.department === dept);
-    sync.activeCount = sync.employees.filter((e) => e.isActive).length;
-    sync.totalCount = sync.employees.length;
-  }
-  return ok(sync);
 });
 
 /* ────────────────────────────────────────────────────────────────────────────
