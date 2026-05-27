@@ -2,9 +2,76 @@ import type {
   CampaignDetailResponse,
   CheckItemSummary,
   DocumentMatchItem,
+  HrEmployee,
+  HrSyncResponse,
   ResendRequestItem,
   UserMeResponse,
 } from './types';
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * HR 직원 시드 데이터
+ * ──────────────────────────────────────────────────────────────────────────── */
+const HR_DEPARTMENTS = [
+  { name: '개발팀', count: 142 },
+  { name: '마케팅팀', count: 87 },
+  { name: '영업팀', count: 96 },
+  { name: '디자인팀', count: 41 },
+  { name: '인사팀', count: 18 },
+  { name: '재무팀', count: 32 },
+  { name: '운영팀', count: 64 },
+  { name: '기획팀', count: 30 },
+];
+
+const HR_EMPLOYEE_SEEDS: Array<Omit<HrEmployee, 'employeeId'> & { active?: boolean }> = [
+  { employeeNo: '001', name: '김지원', email: 'jiwon.kim@acme.co.kr', department: '마케팅팀', jobTitle: '매니저', isActive: true },
+  { employeeNo: '002', name: '박서연', email: 'seoyeon.park@acme.co.kr', department: '개발팀', jobTitle: '시니어', isActive: true },
+  { employeeNo: '003', name: '이도현', email: 'dohyun.lee@acme.co.kr', department: '영업팀', jobTitle: '대리', isActive: true },
+  { employeeNo: '004', name: '최민준', email: 'minjun.choi@acme.co.kr', department: '디자인팀', jobTitle: '주임', isActive: true },
+  { employeeNo: '005', name: '정하윤', email: 'hayoon.jung@acme.co.kr', department: '인사팀', jobTitle: '매니저', isActive: true },
+  { employeeNo: '006', name: '조은우', email: 'eunwoo.jo@acme.co.kr', department: '재무팀', jobTitle: '대리', isActive: true },
+  { employeeNo: '007', name: '한지호', email: 'jiho.han@acme.co.kr', department: '개발팀', jobTitle: '시니어', isActive: true },
+  { employeeNo: '008', name: '황도윤', email: 'doyoon.hwang@acme.co.kr', department: '영업팀', jobTitle: '사원', isActive: true },
+  { employeeNo: '009', name: '오승아', email: 'seungah.oh@acme.co.kr', department: '기획팀', jobTitle: '주임', isActive: true },
+  { employeeNo: '010', name: '임채원', email: 'chaewon.lim@acme.co.kr', department: '운영팀', jobTitle: '대리', isActive: true },
+  { employeeNo: '011', name: '강민서', email: 'minseo.kang@acme.co.kr', department: '개발팀', jobTitle: '주임', isActive: false },
+  { employeeNo: '012', name: '유지안', email: '', department: '마케팅팀', jobTitle: '사원', isActive: true },
+];
+
+const generateHrEmployees = (): HrEmployee[] => {
+  const base = HR_EMPLOYEE_SEEDS.map((s, i) => ({ ...s, employeeId: `emp_${String(i + 1).padStart(3, '0')}` }));
+  // Fill up to ~510 active with generated rows
+  const extra: HrEmployee[] = [];
+  const depts = HR_DEPARTMENTS;
+  let idx = base.length;
+  for (const dept of depts) {
+    const needed = Math.max(0, dept.count - base.filter((e) => e.department === dept.name).length);
+    for (let k = 0; k < Math.min(needed, 10); k++) {
+      idx++;
+      extra.push({
+        employeeId: `emp_${String(idx).padStart(3, '0')}`,
+        employeeNo: String(idx).padStart(3, '0'),
+        name: `직원${idx}`,
+        email: `employee${idx}@acme.co.kr`,
+        department: dept.name,
+        jobTitle: '사원',
+        isActive: true,
+      });
+    }
+  }
+  return [...base, ...extra];
+};
+
+export const MOCK_HR_EMPLOYEES: HrEmployee[] = generateHrEmployees();
+
+export const MOCK_HR_SYNC: HrSyncResponse = {
+  lastSyncAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+  totalCount: 512,
+  activeCount: 510,
+  inactiveCount: 2,
+  noEmailCount: 0,
+  departments: HR_DEPARTMENTS,
+  employees: MOCK_HR_EMPLOYEES,
+};
 
 /* ────────────────────────────────────────────────────────────────────────────
  * 내부 시드 타입 (mock 전용 — 외부에 노출되는 응답 DTO 아님)

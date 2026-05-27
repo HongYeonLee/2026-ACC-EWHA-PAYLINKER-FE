@@ -22,5 +22,5 @@ export const recipientApi = {
 
   /** ERR-003 — 수신자 재전송 요청 */
   submitResendRequest: (body: ResendSubmitRequest) =>
-    api.post<ResendSubmitResponse>('/secure-links/resend-request', body, { auth: 'recipient' }),
+    api.post<ResendSubmitResponse>('/secure-links/resend-request', body, { auth: 'none' }),
 };

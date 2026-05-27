@@ -11,27 +11,13 @@ interface NavItem {
   match?: string[];
 }
 
-const NAV_SECTIONS: Array<{ title: string; items: NavItem[] }> = [
-  {
-    title: '발송 관리',
-    items: [
-      { to: '/admin', label: '대시보드', icon: 'Dashboard' },
-      { to: '/admin/campaigns', label: '발송 이력', icon: 'History' },
-      { to: '/admin/campaigns/new', label: '새 발송', icon: 'Send' },
-      { to: '/admin/scheduled', label: '예약 발송', icon: 'Calendar' },
-    ],
-  },
-  {
-    title: '확인 & 알림',
-    items: [
-      { to: '/admin/checks', label: '확인 필요', icon: 'Alert' },
-      { to: '/admin/resend-requests', label: '재전송 요청', icon: 'Inbox' },
-    ],
-  },
-  {
-    title: '설정',
-    items: [{ to: '/admin/settings', label: '설정', icon: 'Settings' }],
-  },
+const NAV_ITEMS: NavItem[] = [
+  { to: '/admin', label: '대시보드', icon: 'Dashboard' },
+  { to: '/admin/campaigns/new', label: '새 발송', icon: 'Send' },
+  { to: '/admin/campaigns', label: '발송 이력', icon: 'History' },
+  { to: '/admin/checks', label: '확인 필요', icon: 'Alert' },
+  { to: '/admin/scheduled', label: '예약 발송', icon: 'Calendar' },
+  { to: '/admin/settings', label: '설정', icon: 'Settings' },
 ];
 
 export function AdminSidebar({ onClose }: { onClose?: () => void }) {
@@ -56,40 +42,36 @@ export function AdminSidebar({ onClose }: { onClose?: () => void }) {
       </div>
 
       <nav className="flex-1 overflow-y-auto px-3 py-5">
-        {NAV_SECTIONS.map((section) => (
-          <div key={section.title} className="mb-6">
-            <div className="px-3 pb-2.5 text-[10px] font-medium tracking-[0.18em] uppercase text-[var(--color-sidebar-text-muted)]">
-              {section.title}
-            </div>
-            <ul className="space-y-1">
-              {section.items.map((item) => {
-                const isActive =
-                  item.to === '/admin'
-                    ? location.pathname === '/admin'
-                    : location.pathname.startsWith(item.to);
-                const Ico = Icon[item.icon];
-                return (
-                  <li key={item.to}>
-                    <NavLink
-                      to={item.to}
-                      end={item.to === '/admin'}
-                      onClick={onClose}
-                      className={cn(
-                        'flex items-center gap-3 rounded-md px-3 py-3 text-[13px] transition',
-                        isActive
-                          ? 'bg-mint-500/15 text-mint-300'
-                          : 'text-[var(--color-sidebar-text)] hover:bg-white/[0.04] hover:text-[var(--color-sidebar-text-strong)]',
-                      )}
-                    >
-                      <Ico size={17} />
-                      <span className="flex-1">{item.label}</span>
-                    </NavLink>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        ))}
+        <ul className="space-y-1">
+          {NAV_ITEMS.map((item) => {
+            const isActive =
+              item.to === '/admin'
+                ? location.pathname === '/admin'
+                : item.to === '/admin/campaigns'
+                  ? location.pathname.startsWith('/admin/campaigns') &&
+                    !location.pathname.startsWith('/admin/campaigns/new')
+                  : location.pathname.startsWith(item.to);
+            const Ico = Icon[item.icon];
+            return (
+              <li key={item.to}>
+                <NavLink
+                  to={item.to}
+                  end={item.to === '/admin'}
+                  onClick={onClose}
+                  className={cn(
+                    'flex items-center gap-3 rounded-md px-3 py-3 text-[13px] transition',
+                    isActive
+                      ? 'bg-mint-500/15 text-mint-300'
+                      : 'text-[var(--color-sidebar-text)] hover:bg-white/[0.04] hover:text-[var(--color-sidebar-text-strong)]',
+                  )}
+                >
+                  <Ico size={17} />
+                  <span className="flex-1">{item.label}</span>
+                </NavLink>
+              </li>
+            );
+          })}
+        </ul>
       </nav>
 
       <div className="border-t border-[var(--color-sidebar-divider)] px-3 py-4">
