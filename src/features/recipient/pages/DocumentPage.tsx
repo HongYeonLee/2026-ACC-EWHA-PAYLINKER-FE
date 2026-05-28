@@ -9,6 +9,13 @@ import { formatDate, formatNumber, formatRelative } from '../../../shared/lib/fo
 import { type ResendReason, RESEND_REASON_LABEL } from '../../../shared/api/types';
 import { recipientApi } from '../api';
 
+const LNK_ERROR_CODE_MAP: Record<string, string> = {
+  LNK_EXPIRED: 'EXPIRED',
+  LNK_REUSED: 'REUSED',
+  LNK_INVALID_LINK: 'INVALID_LINK',
+  LNK_UNAUTHORIZED: 'UNAUTHORIZED',
+};
+
 export function DocumentPage() {
   const linkSessionToken = useAuthStore((s) => s.linkSessionToken);
   const linkSession = useAuthStore((s) => s.linkSession);
@@ -48,6 +55,18 @@ export function DocumentPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data?.recipientName]);
 
+  // Auto-redirect to expired page when session token expires
+  useEffect(() => {
+    if (!data?.expiresAt) return;
+    const msLeft = new Date(data.expiresAt).getTime() - Date.now();
+    if (msLeft <= 0) {
+      navigate('/link-error/EXPIRED', { replace: true });
+      return;
+    }
+    const timer = setTimeout(() => navigate('/link-error/EXPIRED', { replace: true }), msLeft);
+    return () => clearTimeout(timer);
+  }, [data?.expiresAt, navigate]);
+
   const expiresInLabel = useMemo(() => {
     if (!data) return null;
     return formatRelative(data.expiresAt);
@@ -58,8 +77,9 @@ export function DocumentPage() {
   }
 
   if (error) {
-    if (error instanceof ApiError && error.code === 'LNK_EXPIRED') {
-      return <Navigate to="/link-error/EXPIRED" replace />;
+    if (error instanceof ApiError) {
+      const reason = LNK_ERROR_CODE_MAP[error.code] ?? 'UNKNOWN';
+      return <Navigate to={`/link-error/${reason}`} replace />;
     }
     return <Navigate to="/link-error/UNKNOWN" replace />;
   }
@@ -124,13 +144,44 @@ export function DocumentPage() {
             본인 명세서를 불러오는 중입니다…
           </div>
         ) : (
-          <div className="px-5 py-7 sm:px-10 sm:py-12">
+          <div className="px-5 py-7 sm:px-10 sm:py-12 space-y-6">
             {data?.documents.map((doc) => (
-              <div
-                key={doc.documentId}
-                className="prose max-w-none rounded-lg border border-border bg-bg-2 px-5 py-7 sm:px-10 sm:py-9"
-                dangerouslySetInnerHTML={{ __html: doc.inlineHtml ?? '' }}
-              />
+              <div key={doc.documentId}>
+                {doc.downloadUrl ? (
+                  <div className="mb-3 flex justify-end">
+                    <a
+                      href={doc.downloadUrl}
+                      download={doc.filename}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1.5 rounded-md border border-border-strong bg-white px-3 py-1.5 text-[12px] font-medium text-ink-2 transition hover:bg-surface-sunken"
+                    >
+                      <Icon.File size={13} />
+                      다운로드
+                    </a>
+                  </div>
+                ) : null}
+                {doc.documentType === 'PDF' ? (
+                  doc.downloadUrl ? (
+                    <iframe
+                      src={doc.downloadUrl}
+                      title={doc.filename}
+                      className="h-[70vh] w-full rounded-lg border border-border"
+                    />
+                  ) : (
+                    <div className="flex h-40 items-center justify-center rounded-lg border border-dashed border-border text-[12.5px] text-ink-4">
+                      PDF 미리보기를 불러올 수 없습니다.
+                    </div>
+                  )
+                ) : doc.documentType === 'JSON' ? (
+                  <JsonDocumentView content={doc.inlineHtml ?? ''} />
+                ) : (
+                  <div
+                    className="prose max-w-none rounded-lg border border-border bg-bg-2 px-5 py-7 sm:px-10 sm:py-9"
+                    dangerouslySetInnerHTML={{ __html: doc.inlineHtml ?? '' }}
+                  />
+                )}
+              </div>
             ))}
           </div>
         )}
@@ -193,6 +244,36 @@ export function DocumentPage() {
         </Field>
       </Modal>
     </RecipientShell>
+  );
+}
+
+function JsonDocumentView({ content }: { content: string }) {
+  let entries: Array<[string, string]> = [];
+  try {
+    const parsed = JSON.parse(content);
+    if (parsed && typeof parsed === 'object') {
+      entries = Object.entries(parsed).map(([k, v]) => [k, String(v)]);
+    }
+  } catch {
+    return (
+      <div className="rounded-lg border border-border bg-bg-2 px-5 py-7 text-[12.5px] text-ink-4">
+        {content}
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-lg border border-border bg-bg-2 overflow-hidden">
+      <table className="w-full text-[12.5px]">
+        <tbody className="divide-y divide-border">
+          {entries.map(([k, v]) => (
+            <tr key={k}>
+              <td className="w-2/5 px-4 py-2.5 font-medium text-ink-3 bg-surface-sunken">{k}</td>
+              <td className="px-4 py-2.5 text-ink-1">{v}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

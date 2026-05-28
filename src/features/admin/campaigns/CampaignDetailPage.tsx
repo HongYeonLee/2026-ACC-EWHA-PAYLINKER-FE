@@ -1,5 +1,15 @@
 import { useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
+
+function downloadCsv(content: string, filename: string) {
+  const blob = new Blob(['﻿' + content], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { campaignApi } from './api';
 import { PageHeader } from '../common/PageHeader';
@@ -72,6 +82,8 @@ export function CampaignDetailPage() {
   const detailQuery = useQuery({
     queryKey: ['campaign', id],
     queryFn: () => campaignApi.detail(id),
+    refetchInterval: (query) =>
+      query.state.data?.status === 'SENDING' ? 8_000 : false,
   });
   const c = detailQuery.data;
 
@@ -392,6 +404,8 @@ function RecipientsPanel({
 }) {
   const [filter, setFilter] = useState<ViewFilter>(initialFilter);
   const [page, setPage] = useState(1);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const queryClient = useQueryClient();
 
   const viewQuery = useQuery({
     queryKey: ['campaign-view-history', campaignId, { filter, page }],
@@ -408,6 +422,53 @@ function RecipientsPanel({
     queryFn: () => campaignApi.sendFailures(campaignId, { page, pageSize: PAGE_SIZE }),
     enabled: filter === 'FAILED',
   });
+
+  const selectedReminderMutation = useMutation({
+    mutationFn: (ids: string[]) =>
+      campaignApi.reminders(campaignId, { target: 'SELECTED', campaignRecipientIds: ids }),
+    onSuccess: (res) => {
+      toast.success('선택 리마인드 발송', `${res.queuedCount}명에게 안내 메일을 보냈습니다.`);
+      setSelectedIds(new Set());
+    },
+  });
+
+  const selectedResendMutation = useMutation({
+    mutationFn: (ids: string[]) =>
+      campaignApi.manualResend(campaignId, { target: 'SELECTED', campaignRecipientIds: ids }),
+    onSuccess: (res) => {
+      toast.success('선택 재발송 요청', `${res.queuedCount}명이 발송 큐에 추가됐습니다.`);
+      setSelectedIds(new Set());
+      queryClient.invalidateQueries({ queryKey: ['campaign-send-failures', campaignId] });
+      queryClient.invalidateQueries({ queryKey: ['campaign', campaignId] });
+    },
+  });
+
+  const currentIds =
+    filter === 'FAILED'
+      ? (failureQuery.data?.items ?? []).map((r) => r.campaignRecipientId)
+      : (viewQuery.data?.items ?? []).map((r) => r.campaignRecipientId);
+
+  const allSelected =
+    currentIds.length > 0 && currentIds.every((id) => selectedIds.has(id));
+
+  function toggleAll() {
+    setSelectedIds((prev) => {
+      if (allSelected) {
+        const next = new Set(prev);
+        currentIds.forEach((id) => next.delete(id));
+        return next;
+      }
+      return new Set([...prev, ...currentIds]);
+    });
+  }
+
+  function toggleOne(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
 
   const isLoading = filter === 'FAILED' ? failureQuery.isLoading : viewQuery.isLoading;
   const totalCount =
@@ -431,21 +492,105 @@ function RecipientsPanel({
             <ApiBadge method="GET" path="/api/campaigns/:id/view-history" note="RST-002" />
           )
         }
+        actions={
+          <button
+            type="button"
+            onClick={() => {
+              if (filter === 'FAILED') {
+                const items = failureQuery.data?.items ?? [];
+                const rows = [
+                  '수신자,부서,이메일,실패사유,재시도,실패시각',
+                  ...items.map((r) => `${r.name},${r.department},${r.email},${r.failureReason},${r.retryCount},${r.failedAt}`),
+                ];
+                downloadCsv(rows.join('\n'), 'send-failures.csv');
+              } else {
+                const items = viewQuery.data?.items ?? [];
+                const rows = [
+                  '수신자,사번,이메일,열람여부,최초열람,조회수,링크상태,링크만료',
+                  ...items.map((r) => `${r.name},${r.employeeNo},${r.email},${r.isViewed ? '완료' : '미확인'},${r.firstViewedAt ?? '-'},${r.viewCount},${r.linkStatus},${r.linkExpiresAt ?? '-'}`),
+                ];
+                downloadCsv(rows.join('\n'), 'view-history.csv');
+              }
+            }}
+            className="inline-flex items-center gap-1 text-[11.5px] font-medium text-ink-3 hover:text-ink-1"
+          >
+            <Icon.File size={12} /> CSV 내보내기
+          </button>
+        }
       />
       <CardBody className="pb-2">
         <Pill
           items={VIEW_FILTERS}
           value={filter}
           onChange={(v) => {
-            setFilter(v);
+            setFilter(v as ViewFilter);
             setPage(1);
+            setSelectedIds(new Set());
           }}
         />
       </CardBody>
+
+      {selectedIds.size > 0 ? (
+        <div className="flex items-center justify-between gap-3 border-b border-border bg-mint-50 px-5 py-2.5 text-[12.5px]">
+          <span className="font-medium text-mint-700">{selectedIds.size}명 선택됨</span>
+          <div className="flex gap-2">
+            {filter !== 'FAILED' ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => {
+                  const ids = [...selectedIds];
+                  if (ids.length > 1000) {
+                    toast.warn('선택 제한', '리마인드는 최대 1,000명까지 가능합니다.');
+                    return;
+                  }
+                  selectedReminderMutation.mutate(ids);
+                }}
+                loading={selectedReminderMutation.isPending}
+                iconLeft={<Icon.Mail size={13} />}
+              >
+                선택 리마인드
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                onClick={() => {
+                  const ids = [...selectedIds];
+                  if (ids.length > 500) {
+                    toast.warn('선택 제한', '재발송은 최대 500명까지 가능합니다.');
+                    return;
+                  }
+                  selectedResendMutation.mutate(ids);
+                }}
+                loading={selectedResendMutation.isPending}
+                iconLeft={<Icon.Refresh size={13} />}
+              >
+                선택 재발송
+              </Button>
+            )}
+            <button
+              type="button"
+              onClick={() => setSelectedIds(new Set())}
+              className="text-[11.5px] text-ink-4 hover:text-ink-2"
+            >
+              선택 해제
+            </button>
+          </div>
+        </div>
+      ) : null}
       {filter === 'FAILED' ? (
         <Table>
           <THead>
             <TR>
+              <TH className="w-8">
+                <input
+                  type="checkbox"
+                  className="rounded border-border-strong"
+                  checked={allSelected}
+                  onChange={toggleAll}
+                  aria-label="전체 선택"
+                />
+              </TH>
               <TH>수신자</TH>
               <TH>부서</TH>
               <TH>이메일</TH>
@@ -457,12 +602,12 @@ function RecipientsPanel({
           <TBody>
             {isLoading ? (
               <>
-                <SkeletonRow cols={6} />
-                <SkeletonRow cols={6} />
+                <SkeletonRow cols={7} />
+                <SkeletonRow cols={7} />
               </>
             ) : (failureQuery.data?.items ?? []).length === 0 ? (
               <tr>
-                <td colSpan={6}>
+                <td colSpan={7}>
                   <EmptyState
                     title="발송 실패 건이 없습니다"
                     description="모든 수신자에게 정상 발송되었습니다."
@@ -473,6 +618,14 @@ function RecipientsPanel({
             ) : (
               failureQuery.data?.items.map((r) => (
                 <TR key={r.campaignRecipientId}>
+                  <TD>
+                    <input
+                      type="checkbox"
+                      className="rounded border-border-strong"
+                      checked={selectedIds.has(r.campaignRecipientId)}
+                      onChange={() => toggleOne(r.campaignRecipientId)}
+                    />
+                  </TD>
                   <TD>
                     <div className="font-medium text-ink-1">{r.name}</div>
                   </TD>
@@ -494,6 +647,15 @@ function RecipientsPanel({
         <Table>
           <THead>
             <TR>
+              <TH className="w-8">
+                <input
+                  type="checkbox"
+                  className="rounded border-border-strong"
+                  checked={allSelected}
+                  onChange={toggleAll}
+                  aria-label="전체 선택"
+                />
+              </TH>
               <TH>수신자</TH>
               <TH>사번</TH>
               <TH>이메일</TH>
@@ -505,12 +667,12 @@ function RecipientsPanel({
           <TBody>
             {isLoading ? (
               <>
-                <SkeletonRow cols={6} />
-                <SkeletonRow cols={6} />
+                <SkeletonRow cols={7} />
+                <SkeletonRow cols={7} />
               </>
             ) : (viewQuery.data?.items ?? []).length === 0 ? (
               <tr>
-                <td colSpan={6}>
+                <td colSpan={7}>
                   <EmptyState
                     title="조회된 수신자가 없습니다"
                     description="필터 조건을 다시 확인해 주세요."
@@ -521,6 +683,14 @@ function RecipientsPanel({
             ) : (
               viewQuery.data?.items.map((r) => (
                 <TR key={r.campaignRecipientId}>
+                  <TD>
+                    <input
+                      type="checkbox"
+                      className="rounded border-border-strong"
+                      checked={selectedIds.has(r.campaignRecipientId)}
+                      onChange={() => toggleOne(r.campaignRecipientId)}
+                    />
+                  </TD>
                   <TD>
                     <div className="font-medium text-ink-1">{r.name}</div>
                   </TD>
@@ -629,12 +799,26 @@ function DocumentsPanel({ campaignId }: { campaignId: string }) {
 
 function LinksPanel({ campaignId }: { campaignId: string }) {
   const [page, setPage] = useState(1);
+  const queryClient = useQueryClient();
   const { data, isLoading } = useQuery({
     queryKey: ['campaign-view-history-links', campaignId, page],
     queryFn: () => campaignApi.viewHistory(campaignId, { filter: 'ALL', page, pageSize: PAGE_SIZE }),
   });
   const items = data?.items ?? [];
   const totalPages = data ? Math.max(1, Math.ceil(data.totalCount / data.pageSize)) : 1;
+
+  const resendOneMutation = useMutation({
+    mutationFn: (recipientId: string) =>
+      campaignApi.manualResend(campaignId, {
+        target: 'SELECTED',
+        campaignRecipientIds: [recipientId],
+      }),
+    onSuccess: (res) => {
+      toast.success('개별 재발송 요청', `${res.queuedCount}건이 발송 큐에 추가됐습니다.`);
+      queryClient.invalidateQueries({ queryKey: ['campaign', campaignId] });
+      queryClient.invalidateQueries({ queryKey: ['campaign-view-history-links', campaignId] });
+    },
+  });
 
   return (
     <Card>
@@ -643,6 +827,21 @@ function LinksPanel({ campaignId }: { campaignId: string }) {
         subtitle="수신자별 링크 상태와 열람 시각을 확인합니다."
         apiBadge={
           <ApiBadge method="GET" path="/api/campaigns/:id/view-history" note="RST-002" />
+        }
+        actions={
+          <button
+            type="button"
+            onClick={() => {
+              const rows = [
+                '수신자,사번,이메일,링크상태,최초열람,조회수,만료시각',
+                ...items.map((l) => `${l.name},${l.employeeNo},${l.email},${l.linkStatus},${l.firstViewedAt ?? '-'},${l.viewCount},${l.linkExpiresAt ?? '-'}`),
+              ];
+              downloadCsv(rows.join('\n'), 'link-history.csv');
+            }}
+            className="inline-flex items-center gap-1 text-[11.5px] font-medium text-ink-3 hover:text-ink-1"
+          >
+            <Icon.File size={12} /> CSV 내보내기
+          </button>
         }
       />
       <Table>
@@ -655,17 +854,18 @@ function LinksPanel({ campaignId }: { campaignId: string }) {
             <TH>최초 열람</TH>
             <TH className="text-right">조회수</TH>
             <TH>만료 시각</TH>
+            <TH />
           </TR>
         </THead>
         <TBody>
           {isLoading ? (
             <>
-              <SkeletonRow cols={7} />
-              <SkeletonRow cols={7} />
+              <SkeletonRow cols={8} />
+              <SkeletonRow cols={8} />
             </>
           ) : items.length === 0 ? (
             <tr>
-              <td colSpan={7}>
+              <td colSpan={8}>
                 <EmptyState
                   title="발송된 링크가 없습니다"
                   description="발송 시작 후 이 영역에서 링크 상태를 모니터링할 수 있습니다."
@@ -702,6 +902,21 @@ function LinksPanel({ campaignId }: { campaignId: string }) {
                 </TD>
                 <TD className="num text-right text-[12px] text-ink-2">{l.viewCount}</TD>
                 <TD className="num text-[11.5px] text-ink-4">{formatDate(l.linkExpiresAt)}</TD>
+                <TD className="text-right">
+                  {(l.linkStatus === 'EXPIRED' || l.linkStatus === 'USED') ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      loading={
+                        resendOneMutation.isPending &&
+                        resendOneMutation.variables === l.campaignRecipientId
+                      }
+                      onClick={() => resendOneMutation.mutate(l.campaignRecipientId)}
+                    >
+                      재발송
+                    </Button>
+                  ) : null}
+                </TD>
               </TR>
             ))
           )}

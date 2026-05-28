@@ -72,6 +72,8 @@ export function CampaignNewPage() {
     allowOneTimeLink: true,
     allowResendRequest: true,
     resendRequestLimit: 1,
+    maxRecipients: undefined,
+    maxDailyCount: undefined,
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [scheduledSendAt, setScheduledSendAt] = useState('');
@@ -82,6 +84,11 @@ export function CampaignNewPage() {
   const [matchKey, setMatchKey] = useState<(typeof MATCH_KEYS)[number]>('employeeNo');
 
   const existingCampaignId = searchParams.get('campaignId') ?? campaign?.campaignId ?? null;
+  const isEditMode = !!existingCampaignId;
+
+  // recipientBatchId persisted in URL so page refresh doesn't lose validation state
+  const batchIdFromUrl = searchParams.get('batchId');
+  const effectiveBatchId = recipientBatchId ?? batchIdFromUrl;
 
   const detailQuery = useQuery({
     queryKey: ['campaign', existingCampaignId],
@@ -90,9 +97,9 @@ export function CampaignNewPage() {
   });
 
   const recipientValidationQuery = useQuery({
-    queryKey: ['campaign-validation', existingCampaignId, recipientBatchId],
-    queryFn: () => campaignApi.validateUpload(existingCampaignId!, recipientBatchId!),
-    enabled: !!existingCampaignId && !!recipientBatchId,
+    queryKey: ['campaign-validation', existingCampaignId, effectiveBatchId],
+    queryFn: () => campaignApi.validateUpload(existingCampaignId!, effectiveBatchId!),
+    enabled: !!existingCampaignId && !!effectiveBatchId,
     retry: false,
   });
   const matchesQuery = useQuery({
@@ -141,6 +148,11 @@ export function CampaignNewPage() {
       campaignApi.uploadRecipients(existingCampaignId!, file, uploadType),
     onSuccess: (res) => {
       setRecipientBatchId(res.uploadBatchId);
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.set('batchId', res.uploadBatchId);
+        return next;
+      });
       toast.success(
         '수신자 데이터가 업로드되었습니다.',
         `정상 ${res.validRowCount}건 · 오류 ${res.errorRowCount}건 · 중복 ${res.duplicateRowCount}건`,
@@ -220,12 +232,16 @@ export function CampaignNewPage() {
   return (
     <div>
       <PageHeader
-        title="새 발송"
-        description="캠페인 정보 → 수신자 업로드 → 명세서 업로드 → 최종 확인 → 발송 순서로 진행합니다."
+        title={isEditMode ? '캠페인 수정' : '새 발송'}
+        description={
+          isEditMode
+            ? '캠페인 정보를 수정합니다. DRAFT/READY/SCHEDULED 상태에서만 가능합니다.'
+            : '캠페인 정보 → 수신자 업로드 → 명세서 업로드 → 최종 확인 → 발송 순서로 진행합니다.'
+        }
         breadcrumbs={[
           { label: '관리자' },
           { label: '발송 이력', to: '/admin/campaigns' },
-          { label: '새 발송' },
+          { label: isEditMode ? '캠페인 수정' : '새 발송' },
         ]}
         apiBadges={
           <ApiBadgeGroup>
@@ -238,6 +254,15 @@ export function CampaignNewPage() {
           </ApiBadgeGroup>
         }
       />
+
+      {/* Edit mode guard: warn if campaign is in non-editable status */}
+      {isEditMode && detailQuery.data &&
+        ['SENDING', 'SENT', 'PARTIAL_FAILED', 'CANCELLED', 'FAILED'].includes(detailQuery.data.status) ? (
+        <div className="mb-4 rounded-lg border border-warn-100 bg-warn-50 px-4 py-3 text-[12.5px] text-warn-600">
+          <Icon.Alert size={13} className="-mt-0.5 mr-1.5 inline" />
+          현재 캠페인 상태(<strong>{detailQuery.data.status}</strong>)에서는 수정할 수 없습니다.
+        </div>
+      ) : null}
 
       {/* Stepper */}
       <Card className="mb-5">
@@ -307,6 +332,32 @@ export function CampaignNewPage() {
               />
             </Field>
 
+            <Field label="최대 수신자 수" hint="비워두면 제한 없음 (최대 100,000)">
+              <Input
+                type="number"
+                value={form.maxRecipients ?? ''}
+                onChange={(e) =>
+                  setForm((f) => ({
+                    ...f,
+                    maxRecipients: e.target.value ? Number(e.target.value) : undefined,
+                  }))
+                }
+                placeholder="제한 없음"
+              />
+            </Field>
+            <Field label="일일 최대 발송 수" hint="비워두면 제한 없음 (최대 100,000)">
+              <Input
+                type="number"
+                value={form.maxDailyCount ?? ''}
+                onChange={(e) =>
+                  setForm((f) => ({
+                    ...f,
+                    maxDailyCount: e.target.value ? Number(e.target.value) : undefined,
+                  }))
+                }
+                placeholder="제한 없음"
+              />
+            </Field>
             <ToggleField
               label="일회용 링크 적용"
               hint="확인 후 동일 링크로 다시 열람할 수 없습니다."
@@ -370,13 +421,35 @@ export function CampaignNewPage() {
             apiBadge={<ApiBadge method="POST" path="/api/campaigns/:id/recipients/upload" note="RCP-001 / RCP-002" />}
           />
           <CardBody className="space-y-4">
-            <div className="flex flex-wrap items-center gap-3">
-              <span className="text-[12px] font-medium text-ink-3">업로드 방식</span>
-              <Pill items={UPLOAD_TYPES} value={uploadType} onChange={setUploadType} />
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="text-[12px] font-medium text-ink-3">업로드 방식</span>
+                <Pill items={UPLOAD_TYPES} value={uploadType} onChange={setUploadType} />
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  const csv =
+                    'employeeNo,name,department,email\n' +
+                    'EMP001,홍길동,인사팀,hong@example.com\n' +
+                    'EMP002,김철수,재무팀,kim@example.com\n';
+                  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = 'recipients-sample.csv';
+                  a.click();
+                  URL.revokeObjectURL(url);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-md border border-border-strong bg-white px-3 py-1.5 text-[12px] font-medium text-ink-3 transition hover:bg-surface-sunken"
+              >
+                <Icon.File size={13} />
+                샘플 CSV 다운로드
+              </button>
             </div>
             <FileDrop
               accept=".csv,.xlsx,.xls"
-              hint="CSV / XLSX / XLS · 사번, 성명, 부서, 이메일 컬럼 포함"
+              hint="CSV / XLSX / XLS · employeeNo, name, department, email 컬럼 포함"
               onFile={(file) => uploadRecipientsMutation.mutate({ file })}
             />
             {recipientValidationQuery.data ? (
@@ -571,11 +644,53 @@ export function CampaignNewPage() {
               hint="현재로부터 최소 5분 후 시점만 지정 가능합니다."
               required
             >
-              <Input
-                type="datetime-local"
-                value={scheduledSendAt}
-                onChange={(e) => setScheduledSendAt(e.target.value)}
-              />
+              <div className="space-y-2">
+                <Input
+                  type="datetime-local"
+                  value={scheduledSendAt}
+                  onChange={(e) => setScheduledSendAt(e.target.value)}
+                />
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    {
+                      label: '이번 달 1일 09:00',
+                      getValue: () => {
+                        const d = new Date();
+                        d.setDate(1);
+                        d.setHours(9, 0, 0, 0);
+                        return d.toISOString().slice(0, 16);
+                      },
+                    },
+                    {
+                      label: '이번 달 말일 09:00',
+                      getValue: () => {
+                        const d = new Date();
+                        d.setMonth(d.getMonth() + 1, 0);
+                        d.setHours(9, 0, 0, 0);
+                        return d.toISOString().slice(0, 16);
+                      },
+                    },
+                    {
+                      label: '다음 달 1일 09:00',
+                      getValue: () => {
+                        const d = new Date();
+                        d.setMonth(d.getMonth() + 1, 1);
+                        d.setHours(9, 0, 0, 0);
+                        return d.toISOString().slice(0, 16);
+                      },
+                    },
+                  ].map((preset) => (
+                    <button
+                      key={preset.label}
+                      type="button"
+                      onClick={() => setScheduledSendAt(preset.getValue())}
+                      className="rounded-md border border-border-strong bg-white px-2.5 py-1 text-[11.5px] font-medium text-ink-3 transition hover:bg-surface-sunken"
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </Field>
             <div className="rounded-md border border-dashed border-border-strong bg-surface-sunken px-4 py-3 text-[11.5px] leading-relaxed text-ink-3">
               <div className="font-medium text-ink-2">예약 시 유의 사항</div>
@@ -594,6 +709,10 @@ export function CampaignNewPage() {
               onClick={() => {
                 if (!scheduledSendAt) {
                   toast.warn('예약 시각', '예약 시각을 입력해 주세요.');
+                  return;
+                }
+                if (new Date(scheduledSendAt).getTime() - Date.now() < 5 * 60 * 1000) {
+                  toast.warn('예약 시각', '현재로부터 최소 5분 후 시점을 입력해 주세요.');
                   return;
                 }
                 scheduleMutation.mutate(new Date(scheduledSendAt).toISOString());

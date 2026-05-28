@@ -7,6 +7,13 @@ import { useAuthStore } from '../../../shared/stores/auth.store';
 import { ApiBadge, Icon } from '../../../shared/ui';
 import { recipientApi } from '../api';
 
+const LNK_ERROR_CODE_MAP: Record<string, string> = {
+  LNK_EXPIRED: 'EXPIRED',
+  LNK_REUSED: 'REUSED',
+  LNK_INVALID_LINK: 'INVALID_LINK',
+  LNK_UNAUTHORIZED: 'UNAUTHORIZED',
+};
+
 export function LinkValidatePage() {
   const { token = '' } = useParams<{ token: string }>();
   const navigate = useNavigate();
@@ -29,11 +36,8 @@ export function LinkValidatePage() {
     },
     onError: (error: unknown) => {
       if (error instanceof ApiError) {
-        const reason = error.code.replace(/^LNK_/, '');
-        navigate(`/link-error/${reason}`, {
-          replace: true,
-          state: { token },
-        });
+        const reason = LNK_ERROR_CODE_MAP[error.code] ?? 'UNKNOWN';
+        navigate(`/link-error/${reason}`, { replace: true, state: { token } });
       } else {
         navigate('/link-error/UNKNOWN', { replace: true });
       }

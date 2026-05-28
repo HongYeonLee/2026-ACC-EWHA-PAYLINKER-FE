@@ -61,7 +61,10 @@ function pickAuthHeader(auth: RequestOptions['auth']) {
   if (auth === 'none') return undefined;
   const state = useAuthStore.getState();
   if (auth === 'recipient') {
-    return state.linkSessionToken ? `Bearer ${state.linkSessionToken}` : undefined;
+    const t = state.linkSessionToken;
+    if (!t) return undefined;
+    // BE generates tokens with ls_ prefix already; guard for safety.
+    return `Bearer ${t.startsWith('ls_') ? t : `ls_${t}`}`;
   }
   // Default: admin
   return state.adminToken ? `Bearer ${state.adminToken}` : undefined;

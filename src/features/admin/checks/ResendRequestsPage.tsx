@@ -11,7 +11,9 @@ import {
   Card,
   CardBody,
   EmptyState,
+  Field,
   Icon,
+  Modal,
   Pill,
   SkeletonRow,
   TBody,
@@ -20,6 +22,7 @@ import {
   THead,
   TR,
   Table,
+  Textarea,
   toast,
 } from '../../../shared/ui';
 import {
@@ -39,6 +42,8 @@ const FILTERS: Array<{ value: 'ALL' | ResendRequestStatus; label: string }> = [
 
 export function ResendRequestsPage() {
   const [filter, setFilter] = useState<'ALL' | ResendRequestStatus>('REQUESTED');
+  const [rejectTarget, setRejectTarget] = useState<string | null>(null);
+  const [rejectReason, setRejectReason] = useState('');
   const queryClient = useQueryClient();
   const { data, isLoading } = useQuery({
     queryKey: ['resend-requests', filter],
@@ -49,11 +54,14 @@ export function ResendRequestsPage() {
   });
 
   const actionMutation = useMutation({
-    mutationFn: ({ requestId, action }: { requestId: string; action: ResendRequestAction }) =>
-      notificationApi.resendRequestAction(requestId, { action }),
-    onSuccess: (_res, vars) => {
+    mutationFn: ({ requestId, action, reason }: { requestId: string; action: ResendRequestAction; reason?: string }) =>
+      notificationApi.resendRequestAction(requestId, { action, reason }),
+    onSuccess: (res, vars) => {
       if (vars.action === 'APPROVE') {
-        toast.success('재전송이 승인되었습니다.', '새 보안 링크가 발급되어 발송됩니다.');
+        const detail = res.newLinkExpiresAt
+          ? `새 링크 만료: ${formatDate(res.newLinkExpiresAt)}`
+          : '새 보안 링크가 발급되어 발송됩니다.';
+        toast.success('재전송이 승인되었습니다.', detail);
       } else {
         toast.success('재전송 요청이 반려되었습니다.');
       }
@@ -61,6 +69,13 @@ export function ResendRequestsPage() {
       queryClient.invalidateQueries({ queryKey: ['check-items'] });
     },
   });
+
+  function handleReject() {
+    if (!rejectTarget) return;
+    actionMutation.mutate({ requestId: rejectTarget, action: 'REJECT', reason: rejectReason || undefined });
+    setRejectTarget(null);
+    setRejectReason('');
+  }
 
   const items = data?.items ?? [];
 
@@ -154,9 +169,10 @@ export function ResendRequestsPage() {
                         <Button
                           size="sm"
                           variant="ghost"
-                          onClick={() =>
-                            actionMutation.mutate({ requestId: r.requestId, action: 'REJECT' })
-                          }
+                          onClick={() => {
+                            setRejectTarget(r.requestId);
+                            setRejectReason('');
+                          }}
                         >
                           반려
                         </Button>
@@ -164,7 +180,8 @@ export function ResendRequestsPage() {
                           size="sm"
                           loading={
                             actionMutation.isPending &&
-                            actionMutation.variables?.requestId === r.requestId
+                            actionMutation.variables?.requestId === r.requestId &&
+                            actionMutation.variables?.action === 'APPROVE'
                           }
                           onClick={() =>
                             actionMutation.mutate({ requestId: r.requestId, action: 'APPROVE' })
@@ -187,6 +204,36 @@ export function ResendRequestsPage() {
           </TBody>
         </Table>
       </Card>
+
+      <Modal
+        open={!!rejectTarget}
+        onClose={() => setRejectTarget(null)}
+        title="재전송 요청 반려"
+        description="반려 사유를 입력하면 요청자에게 전달됩니다. (선택)"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setRejectTarget(null)}>
+              취소
+            </Button>
+            <Button
+              variant="danger"
+              onClick={handleReject}
+              loading={actionMutation.isPending}
+            >
+              반려 처리
+            </Button>
+          </>
+        }
+      >
+        <Field label="반려 사유" hint="최대 200자 (선택)">
+          <Textarea
+            rows={3}
+            value={rejectReason}
+            onChange={(e) => setRejectReason(e.target.value.slice(0, 200))}
+            placeholder="반려 사유를 입력해 주세요."
+          />
+        </Field>
+      </Modal>
     </div>
   );
 }
