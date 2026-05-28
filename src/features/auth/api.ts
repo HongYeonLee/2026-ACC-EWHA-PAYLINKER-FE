@@ -20,5 +20,5 @@ export const authApi = {
   adminLogin: (body: AdminLoginInput) =>
     api.post<AdminLoginResult>('/auth/admin/login', body, { auth: 'none' }),
   adminLogout: () => api.post<unknown>('/auth/admin/logout', undefined),
-  me: () => api.get<UserMeResponse>('/users/me', { skipLogoutOn401: true }),
+  me: () => api.get<UserMeResponse>('/users/me'),
 };

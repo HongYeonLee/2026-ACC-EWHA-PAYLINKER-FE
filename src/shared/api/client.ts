@@ -37,8 +37,6 @@ type RequestOptions = RequestInit & {
   auth?: 'admin' | 'recipient' | 'none';
   /** signal for cancellation */
   signal?: AbortSignal;
-  /** 401 수신 시 세션을 자동 클리어하지 않음 (초기 프로필 동기화 등 non-fatal 호출에 사용) */
-  skipLogoutOn401?: boolean;
 };
 
 function buildUrl(path: string, query?: RequestOptions['query']) {
@@ -73,7 +71,7 @@ function pickAuthHeader(auth: RequestOptions['auth']) {
 }
 
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { query, auth = 'admin', headers, body, skipLogoutOn401, ...rest } = options;
+  const { query, auth = 'admin', headers, body, ...rest } = options;
   const url = buildUrl(path, query);
 
   const finalHeaders = new Headers(headers);
@@ -103,7 +101,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   if (!response.ok || (payload && payload.success === false)) {
     const code = payload?.code ?? `HTTP_${response.status}`;
     const message = payload?.message ?? `요청 처리에 실패했습니다. (${response.status})`;
-    if (response.status === 401 && auth !== 'none' && !skipLogoutOn401) {
+    if (response.status === 401 && auth !== 'none') {
       const state = useAuthStore.getState();
       if (auth === 'recipient') state.clearLinkSession();
       else state.clearAdmin();
