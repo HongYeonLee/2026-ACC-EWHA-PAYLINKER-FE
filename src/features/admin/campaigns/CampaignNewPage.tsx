@@ -55,7 +55,7 @@ const UPLOAD_TYPES: Array<{ value: RecipientUploadType; label: string }> = [
 ];
 
 const DOCUMENT_TYPES = ['PDF', 'HTML', 'JSON'] as const;
-const MATCH_KEYS = ['employeeNo', 'email'] as const;
+const MATCH_KEYS = ['EMPLOYEE_NO', 'EMAIL'] as const;
 
 export function CampaignNewPage() {
   const navigate = useNavigate();
@@ -79,7 +79,7 @@ export function CampaignNewPage() {
   const [recipientBatchId, setRecipientBatchId] = useState<string | null>(null);
   const [documentType, setDocumentType] =
     useState<(typeof DOCUMENT_TYPES)[number]>('PDF');
-  const [matchKey, setMatchKey] = useState<(typeof MATCH_KEYS)[number]>('employeeNo');
+  const [matchKey, setMatchKey] = useState<(typeof MATCH_KEYS)[number]>('EMPLOYEE_NO');
 
   const existingCampaignId = searchParams.get('campaignId') ?? campaign?.campaignId ?? null;
 
