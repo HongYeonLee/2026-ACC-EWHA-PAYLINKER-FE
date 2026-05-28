@@ -1,13 +1,10 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { ApiBadge, ApiBadgeGroup, Badge, Icon, Skeleton } from '../../../shared/ui';
-import { CampaignStatusBadge } from '../../../shared/ui/StatusBadge';
+import { ApiBadge, ApiBadgeGroup, Icon, Skeleton } from '../../../shared/ui';
 import { dashboardApi } from './api';
 import { campaignApi } from '../campaigns/api';
-import { notificationApi } from '../notifications/api';
 import { formatDate, formatNumber } from '../../../shared/lib/format';
 import { useAuthStore } from '../../../shared/stores/auth.store';
-import { CHECK_ITEM_TYPE_LABEL } from '../../../shared/constants/status';
 import { cn } from '../../../shared/lib/cn';
 import type { DashboardViewTrendPoint } from '../../../shared/api/types';
 
@@ -32,44 +29,92 @@ export function DashboardPage() {
     queryFn: () => dashboardApi.unviewed(focusId!),
     enabled: !!focusId,
   });
+  const failuresQuery = useQuery({
+    queryKey: ['dashboard', 'failures', focusId],
+    queryFn: () => dashboardApi.failures(focusId!),
+    enabled: !!focusId,
+  });
   const trendQuery = useQuery({
     queryKey: ['dashboard', 'trend', focusId],
     queryFn: () => dashboardApi.viewTrend(focusId!),
     enabled: !!focusId,
   });
-  const checkItemsQuery = useQuery({
-    queryKey: ['dashboard', 'check-items'],
-    queryFn: () => notificationApi.checkItems({ status: 'OPEN', pageSize: 6 }),
-    refetchInterval: 60_000,
-  });
   const scheduledQuery = useQuery({
     queryKey: ['dashboard', 'scheduled'],
     queryFn: () => campaignApi.list({ status: 'SCHEDULED', sort: 'scheduledSendAt:asc', pageSize: 4 }),
   });
-
   const isLoading = summaryQuery.isLoading;
   const isEmpty = !isLoading && !summary?.recentCampaigns.length;
-  const viewRate = focusCampaign ? Math.round((focusCampaign.viewRate ?? 0) * 100) : 0;
   const name = profile?.name ?? '운영자';
 
+  // Campaign stats
+  const total = focusCampaign?.totalRecipientCount ?? 0;
+  const viewed = focusCampaign?.viewedCount ?? 0;
+  const unviewed = focusCampaign?.unviewedCount ?? 0;
+  const failed = focusCampaign?.sendFailedCount ?? 0;
+  const sent = focusCampaign?.sendSuccessCount ?? 0;
+
+  const viewedPct = total > 0 ? ((viewed / total) * 100).toFixed(1) : '0.0';
+  const sentPct = total > 0 ? ((sent / total) * 100).toFixed(1) : '0.0';
+  const barViewed = total > 0 ? (viewed / total) * 100 : 0;
+  const barUnviewed = total > 0 ? (unviewed / total) * 100 : 0;
+  const barFailed = total > 0 ? (failed / total) * 100 : 0;
+
+  // Campaign header
+  const sendCompleted = focusCampaign?.sendCompletedAt;
+  const sendDate = sendCompleted ? new Date(sendCompleted) : null;
+  const nowDate = new Date();
+  const isThisMonth =
+    sendDate &&
+    sendDate.getMonth() === nowDate.getMonth() &&
+    sendDate.getFullYear() === nowDate.getFullYear();
+  const campaignBadgeLabel = isThisMonth
+    ? '이번 달 발송'
+    : sendDate
+      ? `${sendDate.getMonth() + 1}월 발송`
+      : null;
+  const sendTimeText = sendCompleted
+    ? `${formatDate(sendCompleted, 'M월 d일 (EEE) a h:mm')} 발송 완료`
+    : '';
+
+  // Subtitle
+  const subtitle = focusCampaign
+    ? unviewed > 0
+      ? `${focusCampaign.campaignName} 발송이 완료되었습니다. 미열람자 ${formatNumber(unviewed)}명에게 안내가 필요해요.`
+      : `${focusCampaign.campaignName} 발송이 완료되었습니다. 모든 수신자가 명세서를 확인했어요.`
+    : '';
+
+  // Trend chart
+  const trendPoints = trendQuery.data?.points ?? [];
+  const firstHourCount = trendPoints[0]?.viewedCount ?? 0;
+  const currentViewRate = Math.round((trendQuery.data?.currentViewRate ?? 0) * 100);
+
+  // Unviewed elapsed text
+  const maxElapsed = unviewedQuery.data?.maxElapsedHours ?? 0;
+  const elapsedDays = Math.floor(maxElapsed / 24);
+  const elapsedText =
+    elapsedDays > 0
+      ? `발송 후 ${elapsedDays}일이 지났습니다. 리마인드 메일을 보내거나 따로 안내해 주세요.`
+      : '아직 확인하지 않은 수신자가 있습니다.';
+
   return (
-    <div className="space-y-5">
-      {/* Greeting row */}
+    <div className="space-y-6">
+      {/* ── Greeting row ── */}
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-[22px] font-bold tracking-tight text-ink-1">
-            {isEmpty ? `환영해요, ${name}님` : `안녕하세요, ${name}님`}
+            안녕하세요, {name}님
           </h1>
-          <p className="mt-1 text-[13px] text-ink-4">
+          <p className="mt-1 text-[13px] text-ink-3">
             {isEmpty
               ? 'PayLinker 운영자 콘솔에 오신 걸 환영합니다. 첫 번째 발송을 시작해 보세요.'
-              : '발송 현황과 확인이 필요한 항목을 한눈에 살펴보세요.'}
+              : subtitle}
           </p>
         </div>
-        <Link to="/admin/campaigns/new">
+        <Link to="/admin/campaigns/new" className="shrink-0">
           <button
             type="button"
-            className="inline-flex h-9 items-center gap-2 rounded-md bg-navy-700 px-4 text-[12.5px] font-medium text-white shadow-sm transition hover:bg-navy-600"
+            className="inline-flex h-9 items-center gap-2 rounded-lg bg-navy-700 px-4 text-[12.5px] font-medium text-white shadow-sm transition hover:bg-navy-600"
           >
             <Icon.Plus size={14} />새 발송
           </button>
@@ -77,11 +122,11 @@ export function DashboardPage() {
       </div>
 
       <ApiBadgeGroup>
-        <ApiBadge method="GET" path="/api/dashboard/summary" note="STA-001" />
-        <ApiBadge method="GET" path="/api/dashboard/campaigns/:id/summary" note="STA-002" />
-        <ApiBadge method="GET" path="/api/dashboard/campaigns/:id/view-trend" note="STA-003" />
-        <ApiBadge method="GET" path="/api/dashboard/campaigns/:id/unviewed-recipients" note="STA-004" />
-        <ApiBadge method="GET" path="/notifications/check-items" note="REQ-003" />
+        <ApiBadge method="GET" path="/dashboard/summary" note="STA-001" />
+        <ApiBadge method="GET" path="/dashboard/campaigns/:id/summary" note="STA-002" />
+        <ApiBadge method="GET" path="/dashboard/campaigns/:id/view-trend" note="STA-003" />
+        <ApiBadge method="GET" path="/dashboard/campaigns/:id/unviewed-recipients" note="STA-004" />
+        <ApiBadge method="GET" path="/dashboard/campaigns/:id/send-failures" note="STA-005" />
       </ApiBadgeGroup>
 
       {isLoading ? (
@@ -92,211 +137,254 @@ export function DashboardPage() {
         <>
           {/* ── Campaign focus card ── */}
           <div className="overflow-hidden rounded-xl border border-border bg-white shadow-sm">
-            <div className="flex items-center justify-between border-b border-border px-5 py-3.5">
-              <div className="flex items-center gap-2.5">
-                <span className="text-[15px] font-bold text-ink-1">{focusCampaign?.campaignName}</span>
-                {focusCampaign && <CampaignStatusBadge status={focusCampaign.status} />}
-              </div>
+            {/* Header: badge + send time */}
+            <div className="flex items-center gap-3 border-b border-border px-6 py-3.5">
+              {campaignBadgeLabel && (
+                <span className="inline-flex items-center rounded-full bg-mint-500 px-2.5 py-0.5 text-[11px] font-semibold text-white">
+                  {campaignBadgeLabel}
+                </span>
+              )}
+              {sendTimeText && (
+                <span className="text-[12.5px] text-ink-3">{sendTimeText}</span>
+              )}
               {focusCampaign && (
                 <Link
                   to={`/admin/campaigns/${focusCampaign.campaignId}`}
-                  className="inline-flex items-center gap-1 text-[12px] font-medium text-mint-700 hover:underline"
+                  className="ml-auto inline-flex items-center gap-1 text-[12px] font-medium text-mint-700 hover:underline"
                 >
                   상세 보기 <Icon.ChevronRight size={12} />
                 </Link>
               )}
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-[1fr_260px]">
-              {/* Left: stats + bar */}
-              <div className="px-5 py-5">
+
+            {/* Campaign name */}
+            <div className="px-6 pt-4 pb-0">
+              <h2 className="text-[17px] font-bold text-ink-1">{focusCampaign?.campaignName}</h2>
+            </div>
+
+            {/* Body: stats + trend chart */}
+            <div className="grid grid-cols-1 md:grid-cols-[1fr_280px]">
+              {/* Left: 4 stat boxes + progress bar */}
+              <div className="px-6 py-5">
                 <div className="grid grid-cols-4 gap-3">
-                  <CampaignMetric label="총 대상자" value={formatNumber(focusCampaign?.totalRecipientCount ?? 0)} />
-                  <CampaignMetric label="발송 성공" value={formatNumber(focusCampaign?.sendSuccessCount ?? 0)} tone="success" />
-                  <CampaignMetric label="발송 실패" value={formatNumber(focusCampaign?.sendFailedCount ?? 0)} tone="danger" />
-                  <CampaignMetric label="미확인" value={formatNumber(focusCampaign?.unviewedCount ?? 0)} tone="warn" />
+                  <StatBox label="대상자" value={formatNumber(total)} unit="명" />
+                  <StatBox
+                    label="발송 완료"
+                    value={formatNumber(sent)}
+                    unit="명"
+                    sub={`${sentPct}%`}
+                    subSuccess
+                  />
+                  <StatBox
+                    label="확인 완료"
+                    value={formatNumber(viewed)}
+                    unit="명"
+                    sub={`${viewedPct}%`}
+                    subSuccess
+                  />
+                  <StatBox label="아직 확인 전" value={formatNumber(unviewed)} unit="명" />
                 </div>
-                <div className="mt-5 space-y-1.5">
-                  <div className="flex items-center justify-between text-[11.5px] text-ink-3">
-                    <span>열람률</span>
-                    <span className="num font-semibold text-ink-1">{viewRate}%</span>
+
+                {/* Multi-segment progress bar */}
+                <div className="mt-5">
+                  <div className="flex h-3 overflow-hidden rounded-full bg-gray-100">
+                    {barViewed > 0 && (
+                      <div
+                        className="h-full bg-mint-500 transition-[width] duration-700"
+                        style={{ width: `${barViewed}%` }}
+                      />
+                    )}
+                    {barUnviewed > 0 && (
+                      <div
+                        className="h-full bg-gray-300 transition-[width] duration-700"
+                        style={{ width: `${barUnviewed}%` }}
+                      />
+                    )}
+                    {barFailed > 0 && (
+                      <div
+                        className="h-full bg-danger-400 transition-[width] duration-700"
+                        style={{ width: `${barFailed}%` }}
+                      />
+                    )}
                   </div>
-                  <div className="h-2 overflow-hidden rounded-full bg-surface-sunken">
-                    <div
-                      className="h-full rounded-full bg-gradient-to-r from-mint-400 to-mint-600 transition-[width] duration-700"
-                      style={{ width: `${viewRate}%` }}
-                    />
-                  </div>
-                </div>
-                {focusCampaign?.sendCompletedAt && (
-                  <div className="mt-3 num text-[11px] text-ink-5">
-                    발송 완료 {formatDate(focusCampaign.sendCompletedAt)}
-                  </div>
-                )}
-              </div>
-              {/* Right: trend chart */}
-              <div className="border-t border-border bg-surface-sunken px-5 py-4 md:border-l md:border-t-0">
-                <div className="mb-2 flex items-center justify-between">
-                  <span className="text-[10.5px] font-medium uppercase tracking-[0.1em] text-ink-4">확인 추이</span>
-                  {trendQuery.data && (
-                    <span className="num text-[11px] text-ink-4">
-                      {Math.round((trendQuery.data.currentViewRate ?? 0) * 100)}%
+                  <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11.5px] text-ink-3">
+                    <span className="flex items-center gap-1.5">
+                      <span className="inline-block size-2 rounded-full bg-mint-500" />
+                      확인함 {formatNumber(viewed)}명
                     </span>
-                  )}
+                    <span className="flex items-center gap-1.5">
+                      <span className="inline-block size-2 rounded-full bg-gray-300" />
+                      미확인 {formatNumber(unviewed)}명
+                    </span>
+                    {failed > 0 && (
+                      <span className="flex items-center gap-1.5">
+                        <span className="inline-block size-2 rounded-full bg-danger-400" />
+                        발송 실패 {formatNumber(failed)}명
+                      </span>
+                    )}
+                  </div>
                 </div>
-                <TrendChart points={trendQuery.data?.points ?? []} />
+              </div>
+
+              {/* Right: trend chart */}
+              <div className="border-t border-border px-6 py-5 md:border-l md:border-t-0">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-4">
+                  발송 후 30일간 확인 추이
+                </div>
+                <TrendChart points={trendPoints} />
+                {firstHourCount > 0 && (
+                  <p className="mt-2 text-[11.5px] leading-relaxed text-ink-4">
+                    발송 직후 1시간 안에{' '}
+                    <strong className="text-ink-2">{formatNumber(firstHourCount)}명</strong>이
+                    확인했고, 현재{' '}
+                    <strong className="text-ink-2">{currentViewRate}%</strong>가 본인 명세서를
+                    열람했습니다.
+                  </p>
+                )}
               </div>
             </div>
           </div>
 
-          {/* ── Bottom 2-col ── */}
-          <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_320px]">
-            {/* Left col */}
-            <div className="space-y-5">
-              {/* Unviewed recipients */}
+          {/* ── "지금 확인이 필요한 일" ── */}
+          <div>
+            <h2 className="mb-4 text-[15px] font-bold text-ink-1">지금 확인이 필요한 일</h2>
+            <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+              {/* Unviewed card */}
               <div className="overflow-hidden rounded-xl border border-border bg-white shadow-sm">
                 <div className="flex items-center justify-between border-b border-border px-5 py-3.5">
-                  <div>
-                    <div className="text-[14px] font-bold text-ink-1">미확인 수신자 현황</div>
-                    {(unviewedQuery.data?.maxElapsedHours ?? 0) > 0 && (
-                      <div className="mt-0.5 text-[11px] text-ink-4">
-                        최장 {unviewedQuery.data?.maxElapsedHours}시간 경과
-                      </div>
-                    )}
-                  </div>
-                  {focusCampaign && (
-                    <Link
-                      to={`/admin/campaigns/${focusCampaign.campaignId}?tab=recipients&filter=UNVIEWED`}
-                      className="text-[12px] font-medium text-mint-700 hover:underline"
-                    >
-                      전체 보기
-                    </Link>
-                  )}
-                </div>
-                <div className="px-5 py-4">
-                  <div className="flex items-baseline gap-1.5">
-                    <span className="num text-[34px] font-bold leading-none text-warn-600">
-                      {formatNumber(unviewedQuery.data?.totalUnviewedCount ?? 0)}
-                    </span>
-                    <span className="text-[13px] text-ink-4">명</span>
-                  </div>
-                  <ul className="mt-3 space-y-1.5">
-                    {(unviewedQuery.data?.previews ?? []).map((p) => (
-                      <li
-                        key={p.recipientId}
-                        className="flex items-center justify-between rounded-lg border border-border px-3.5 py-2.5 text-[12.5px]"
-                      >
-                        <span className="font-medium text-ink-1">{p.name}</span>
-                        <span className="num text-ink-4">{p.employeeNo}</span>
-                      </li>
-                    ))}
-                    {!(unviewedQuery.data?.previews ?? []).length && (
-                      <li className="rounded-lg border border-dashed border-border px-4 py-4 text-center text-[12.5px] text-ink-4">
-                        미확인 수신자가 없습니다.
-                      </li>
-                    )}
-                  </ul>
+                  <span className="text-[13.5px] font-semibold text-ink-1">
+                    아직 확인하지 않은 직원
+                  </span>
                   <button
                     type="button"
                     onClick={() =>
                       focusCampaign &&
-                      navigate(`/admin/campaigns/${focusCampaign.campaignId}?tab=actions&action=reminder`)
+                      navigate(
+                        `/admin/campaigns/${focusCampaign.campaignId}?tab=actions&action=reminder`,
+                      )
                     }
                     disabled={!focusCampaign}
-                    className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-border-strong px-4 py-2.5 text-[12.5px] font-medium text-ink-2 transition hover:bg-surface-sunken disabled:opacity-40"
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-navy-700 px-3 py-1.5 text-[11.5px] font-medium text-white transition hover:bg-navy-600 disabled:opacity-40"
                   >
-                    <Icon.Mail size={13} /> 리마인드 발송 요청
+                    <Icon.Mail size={12} />
+                    리마인드 보내기
                   </button>
+                </div>
+                <div className="px-5 py-4">
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="num text-[32px] font-bold leading-none text-warn-600">
+                      {formatNumber(unviewedQuery.data?.totalUnviewedCount ?? 0)}
+                    </span>
+                    <span className="text-[13px] text-ink-4">명</span>
+                  </div>
+                  <p className="mt-2 text-[12.5px] leading-relaxed text-ink-4">{elapsedText}</p>
+                  {(unviewedQuery.data?.previews ?? []).length > 0 && (
+                    <div className="mt-3 rounded-lg border border-border px-3.5 py-3">
+                      <div className="mb-2 text-[11px] font-medium text-ink-5">미리보기</div>
+                      <ul className="space-y-1.5">
+                        {unviewedQuery.data!.previews.slice(0, 3).map((p) => (
+                          <li key={p.recipientId} className="text-[12.5px] text-ink-2">
+                            · {p.name} ({p.employeeNo})
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Failed card */}
+              <div className="overflow-hidden rounded-xl border border-border bg-white shadow-sm">
+                <div className="flex items-center justify-between border-b border-border px-5 py-3.5">
+                  <span className="text-[13.5px] font-semibold text-ink-1">
+                    발송이 실패한 직원
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      focusCampaign &&
+                      navigate(
+                        `/admin/campaigns/${focusCampaign.campaignId}?tab=failures`,
+                      )
+                    }
+                    disabled={!focusCampaign}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-navy-700 px-3 py-1.5 text-[11.5px] font-medium text-white transition hover:bg-navy-600 disabled:opacity-40"
+                  >
+                    <Icon.Eye size={12} />
+                    실패 건 보기
+                  </button>
+                </div>
+                <div className="px-5 py-4">
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="num text-[32px] font-bold leading-none text-danger-600">
+                      {formatNumber(failuresQuery.data?.totalFailedCount ?? 0)}
+                    </span>
+                    <span className="text-[13px] text-ink-4">명</span>
+                  </div>
+                  <p className="mt-2 text-[12.5px] leading-relaxed text-ink-4">
+                    이메일 주소가 잘못되었거나 일시적인 오류입니다. 정보를 확인하고 다시
+                    보내주세요.
+                  </p>
+                  {(failuresQuery.data?.previews ?? []).length > 0 && (
+                    <div className="mt-3 rounded-lg border border-border px-3.5 py-3">
+                      <div className="mb-2 text-[11px] font-medium text-ink-5">미리보기</div>
+                      <ul className="space-y-1.5">
+                        {failuresQuery.data!.previews.slice(0, 2).map((p) => (
+                          <li key={p.campaignRecipientId} className="text-[12.5px] text-ink-2">
+                            · {p.name} ({p.department}) — {p.email}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </div>
               </div>
 
               {/* Scheduled campaigns */}
               <div className="overflow-hidden rounded-xl border border-border bg-white shadow-sm">
                 <div className="flex items-center justify-between border-b border-border px-5 py-3.5">
-                  <div className="text-[14px] font-bold text-ink-1">다음 예약 발송</div>
-                  <Link to="/admin/scheduled" className="text-[12px] font-medium text-mint-700 hover:underline">
-                    전체 보기
+                  <span className="text-[13.5px] font-semibold text-ink-1">다음 발송 예정</span>
+                  <Link
+                    to="/admin/scheduled"
+                    className="text-[12px] font-medium text-mint-700 hover:underline"
+                  >
+                    예약 관리 ›
                   </Link>
                 </div>
                 <ul className="divide-y divide-border">
-                  {(scheduledQuery.data?.items ?? []).map((c) => (
+                  {(scheduledQuery.data?.items ?? []).slice(0, 3).map((c) => (
                     <li key={c.campaignId}>
                       <Link
                         to={`/admin/campaigns/${c.campaignId}`}
-                        className="flex items-center justify-between px-5 py-3.5 transition hover:bg-surface-sunken"
+                        className="flex items-start gap-3.5 px-5 py-4 transition hover:bg-surface-sunken"
                       >
-                        <div>
-                          <div className="text-[13px] font-medium text-ink-1">{c.campaignName}</div>
-                          <div className="mt-0.5 num text-[11px] text-ink-4">
-                            <Icon.Calendar size={10} className="mr-1 inline" />
-                            {c.scheduledSendAt ? formatDate(c.scheduledSendAt) : '—'}
+                        <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border bg-surface-sunken text-ink-3">
+                          <Icon.Calendar size={16} />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-[13px] font-medium text-ink-1">
+                            {c.campaignName}
+                          </div>
+                          <div className="mt-0.5 num text-[11.5px] text-ink-4">
+                            {c.scheduledSendAt
+                              ? formatDate(c.scheduledSendAt, 'yyyy년 M월 d일 (EEE) a h:mm')
+                              : '—'}
                           </div>
                         </div>
-                        <div className="num text-[12px] text-ink-3">
+                        <div className="num shrink-0 text-[12px] text-ink-3">
                           {formatNumber(c.totalRecipientCount)}명
                         </div>
                       </Link>
                     </li>
                   ))}
                   {!(scheduledQuery.data?.items ?? []).length && (
-                    <li className="px-5 py-6 text-center text-[12.5px] text-ink-4">
+                    <li className="px-5 py-8 text-center text-[12.5px] text-ink-4">
                       예약된 발송이 없습니다.
                     </li>
                   )}
                 </ul>
               </div>
-            </div>
 
-            {/* Right col: check items */}
-            <div className="overflow-hidden rounded-xl border border-border bg-white shadow-sm">
-              <div className="flex items-center justify-between border-b border-border px-5 py-3.5">
-                <div>
-                  <div className="text-[14px] font-bold text-ink-1">확인 필요 목록</div>
-                  {(checkItemsQuery.data?.openCount ?? 0) > 0 && (
-                    <div className="mt-0.5 text-[11px] text-ink-4">
-                      {checkItemsQuery.data?.openCount}건 미처리
-                    </div>
-                  )}
-                </div>
-                <Link to="/admin/checks" className="text-[12px] font-medium text-mint-700 hover:underline">
-                  전체 보기
-                </Link>
-              </div>
-              {(checkItemsQuery.data?.items ?? []).length === 0 ? (
-                <div className="flex flex-col items-center px-5 py-12 text-center">
-                  <div className="flex size-12 items-center justify-center rounded-full bg-mint-50 text-mint-600">
-                    <Icon.Check size={20} />
-                  </div>
-                  <div className="mt-3 text-[13px] font-medium text-ink-2">모두 처리되었습니다</div>
-                  <div className="mt-1 text-[12px] text-ink-4">새로운 확인 항목이 없습니다.</div>
-                </div>
-              ) : (
-                <ul className="divide-y divide-border">
-                  {checkItemsQuery.data?.items.map((item) => (
-                    <li key={item.checkItemId}>
-                      <button
-                        type="button"
-                        onClick={() => navigate(item.deepLink ?? `/admin/campaigns/${item.campaignId}`)}
-                        className="flex w-full items-start gap-3 px-5 py-4 text-left transition hover:bg-surface-sunken"
-                      >
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate text-[13px] font-medium text-ink-1">
-                            {item.campaignName}
-                          </div>
-                          {item.recipientName && (
-                            <div className="mt-0.5 text-[11.5px] text-ink-3">{item.recipientName}</div>
-                          )}
-                          <div className="mt-1 num text-[10.5px] text-ink-5">
-                            {formatDate(item.createdAt)}
-                          </div>
-                        </div>
-                        <Badge tone="warn" size="xs" className="mt-0.5 shrink-0">
-                          {CHECK_ITEM_TYPE_LABEL[item.itemType] ?? item.itemType}
-                        </Badge>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
             </div>
           </div>
         </>
@@ -307,27 +395,36 @@ export function DashboardPage() {
 
 /* ── Sub-components ─────────────────────────────────────────────────────── */
 
-function CampaignMetric({
+function StatBox({
   label,
   value,
-  tone = 'neutral',
+  unit,
+  sub,
+  subSuccess,
 }: {
   label: string;
   value: string | number;
-  tone?: 'success' | 'warn' | 'danger' | 'neutral';
+  unit?: string;
+  sub?: string;
+  subSuccess?: boolean;
 }) {
-  const color =
-    tone === 'success'
-      ? 'text-mint-700'
-      : tone === 'warn'
-        ? 'text-warn-600'
-        : tone === 'danger'
-          ? 'text-danger-600'
-          : 'text-ink-1';
   return (
-    <div>
-      <div className="text-[10.5px] font-medium uppercase tracking-[0.07em] text-ink-4">{label}</div>
-      <div className={cn('mt-1.5 num text-[22px] font-bold leading-none', color)}>{value}</div>
+    <div className="rounded-lg border border-border p-3.5">
+      <div className="text-[11px] text-ink-4">{label}</div>
+      <div className="mt-1.5 flex items-baseline gap-1">
+        <span className="num text-[22px] font-bold leading-none text-ink-1">{value}</span>
+        {unit && <span className="text-[13px] text-ink-3">{unit}</span>}
+      </div>
+      {sub && (
+        <div
+          className={cn(
+            'mt-1 num text-[11.5px] font-medium',
+            subSuccess ? 'text-mint-700' : 'text-ink-4',
+          )}
+        >
+          {sub}
+        </div>
+      )}
     </div>
   );
 }
@@ -335,7 +432,7 @@ function CampaignMetric({
 function TrendChart({ points }: { points: DashboardViewTrendPoint[] }) {
   if (!points.length) {
     return (
-      <div className="flex h-28 items-center justify-center text-[11.5px] text-ink-5">
+      <div className="flex h-32 items-center justify-center text-[11.5px] text-ink-5">
         데이터 수집 중
       </div>
     );
@@ -346,39 +443,47 @@ function TrendChart({ points }: { points: DashboardViewTrendPoint[] }) {
   const linePath = points
     .map((p, i) => {
       const x = i * stepX;
-      const y = 100 - (p.viewRate * 100 / maxRate) * 85;
+      const y = 100 - (((p.viewRate * 100) / maxRate) * 85 + 5);
       return `${i === 0 ? 'M' : 'L'} ${x.toFixed(1)} ${y.toFixed(1)}`;
     })
     .join(' ');
   const areaPath = `${linePath} L ${w} 100 L 0 100 Z`;
 
   return (
-    <div className="relative h-28">
+    <div className="relative h-32 mt-2">
       <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="absolute inset-0 h-full w-full">
         <defs>
-          <linearGradient id="dash-trend-grad" x1="0" x2="0" y1="0" y2="1">
-            <stop offset="0%" stopColor="var(--color-mint-400)" stopOpacity="0.35" />
+          <linearGradient id="trend-grad" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor="var(--color-mint-400)" stopOpacity="0.25" />
             <stop offset="100%" stopColor="var(--color-mint-400)" stopOpacity="0" />
           </linearGradient>
         </defs>
-        <path d={areaPath} fill="url(#dash-trend-grad)" />
+        <path d={areaPath} fill="url(#trend-grad)" />
         <path
           d={linePath}
           fill="none"
-          stroke="var(--color-mint-500)"
-          strokeWidth="1.8"
+          stroke="var(--color-navy-700)"
+          strokeWidth="2"
           vectorEffect="non-scaling-stroke"
         />
+        {/* Last point dot */}
+        {points.length > 0 && (() => {
+          const last = points[points.length - 1];
+          const x = (points.length - 1) * stepX;
+          const y = 100 - (((last.viewRate * 100) / maxRate) * 85 + 5);
+          return (
+            <circle
+              cx={x.toFixed(1)}
+              cy={y.toFixed(1)}
+              r="2.5"
+              fill="var(--color-mint-500)"
+              stroke="white"
+              strokeWidth="1"
+              vectorEffect="non-scaling-stroke"
+            />
+          );
+        })()}
       </svg>
-      <div className="absolute inset-x-0 bottom-0 flex justify-between px-0.5 text-[9px] text-ink-5">
-        {points
-          .filter((_, i) => i % Math.max(1, Math.ceil(points.length / 4)) === 0)
-          .map((p) => (
-            <span key={p.snapshotAt} className="num">
-              {formatDate(p.snapshotAt, 'HH:mm')}
-            </span>
-          ))}
-      </div>
     </div>
   );
 }
@@ -386,42 +491,28 @@ function TrendChart({ points }: { points: DashboardViewTrendPoint[] }) {
 function DashboardSkeleton() {
   return (
     <div className="space-y-5">
-      <div className="overflow-hidden rounded-xl border border-border bg-white p-5">
-        <Skeleton className="h-4 w-48" />
-        <div className="mt-5 grid grid-cols-4 gap-4">
+      <div className="overflow-hidden rounded-xl border border-border bg-white p-6">
+        <Skeleton className="h-3.5 w-28" />
+        <Skeleton className="mt-3 h-5 w-52" />
+        <div className="mt-5 grid grid-cols-4 gap-3">
           {[...Array(4)].map((_, i) => (
-            <div key={i}>
+            <div key={i} className="rounded-lg border border-border p-3.5">
               <Skeleton className="h-2.5 w-14" />
-              <Skeleton className="mt-2 h-6 w-16" />
+              <Skeleton className="mt-2 h-7 w-16" />
             </div>
           ))}
         </div>
-        <Skeleton className="mt-5 h-2 w-full rounded-full" />
+        <Skeleton className="mt-5 h-3 w-full rounded-full" />
       </div>
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_320px]">
-        <div className="space-y-5">
-          {[0, 1].map((i) => (
-            <div key={i} className="overflow-hidden rounded-xl border border-border bg-white p-5">
-              <Skeleton className="h-4 w-32" />
-              <Skeleton className="mt-3 h-8 w-16" />
-              {[...Array(3)].map((_, j) => (
-                <Skeleton key={j} className="mt-2 h-11 w-full rounded-lg" />
-              ))}
-            </div>
-          ))}
-        </div>
-        <div className="overflow-hidden rounded-xl border border-border bg-white p-5">
-          <Skeleton className="h-4 w-32" />
-          {[...Array(5)].map((_, i) => (
-            <div key={i} className="mt-3 flex items-center justify-between gap-3">
-              <div className="flex-1 space-y-1.5">
-                <Skeleton className="h-3 w-full" />
-                <Skeleton className="h-2.5 w-3/4" />
-              </div>
-              <Skeleton className="h-5 w-14 rounded-full" />
-            </div>
-          ))}
-        </div>
+      <div className="grid grid-cols-2 gap-5">
+        {[...Array(4)].map((_, i) => (
+          <div key={i} className="overflow-hidden rounded-xl border border-border bg-white p-5">
+            <Skeleton className="h-4 w-36" />
+            <Skeleton className="mt-3 h-8 w-20" />
+            <Skeleton className="mt-2 h-4 w-full" />
+            <Skeleton className="mt-4 h-16 w-full rounded-lg" />
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -439,7 +530,6 @@ function EmptyState() {
       <p className="mt-2 text-[13.5px] text-ink-4">
         첫 번째 캠페인을 만들고 수신자에게 명세서를 발송해 보세요.
       </p>
-
       <div className="mx-auto mt-10 grid max-w-lg grid-cols-3 gap-6">
         {[
           { icon: <Icon.User size={18} />, label: '수신자 등록', desc: 'CSV로 수신자 목록을 업로드' },
@@ -454,16 +544,15 @@ function EmptyState() {
               </span>
             </div>
             <div className="text-[13px] font-semibold text-ink-1">{s.label}</div>
-            <div className="text-[11.5px] text-ink-4 leading-snug">{s.desc}</div>
+            <div className="text-[11.5px] leading-snug text-ink-4">{s.desc}</div>
           </div>
         ))}
       </div>
-
       <div className="mt-10 flex flex-col items-center gap-3">
         <Link to="/admin/campaigns/new">
           <button
             type="button"
-            className="inline-flex h-10 items-center gap-2 rounded-lg bg-mint-500 px-6 text-[13px] font-medium text-navy-900 shadow-sm transition hover:bg-mint-400"
+            className="inline-flex h-10 items-center gap-2 rounded-lg bg-navy-700 px-6 text-[13px] font-medium text-white shadow-sm transition hover:bg-navy-600"
           >
             <Icon.Plus size={14} />새 발송 시작하기
           </button>

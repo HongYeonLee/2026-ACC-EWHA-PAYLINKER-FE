@@ -61,7 +61,7 @@ export function AdminTopbar({ onOpenMobileMenu }: { onOpenMobileMenu: () => void
       {/* Right: date + bell */}
       <div className="flex shrink-0 items-center gap-3">
         <span className="hidden num text-[12px] text-ink-4 md:block">
-          {formatDate(new Date(), 'yyyy년 M월 d일 EEEE')}
+          {formatDate(new Date(), 'yyyy년 M월 d일 (EEE)')}
         </span>
 
         <div className="relative">
@@ -78,8 +78,8 @@ export function AdminTopbar({ onOpenMobileMenu }: { onOpenMobileMenu: () => void
           >
             <Icon.Bell size={18} />
             {openCount > 0 ? (
-              <span className="absolute -right-1 -top-1 inline-flex size-4 items-center justify-center rounded-full bg-danger-500 text-[10px] font-bold text-white num">
-                {openCount}
+              <span className="absolute -right-1.5 -top-1.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-danger-500 px-1 text-[10px] font-bold leading-none text-white num">
+                {openCount > 99 ? '99+' : openCount}
               </span>
             ) : null}
           </button>
