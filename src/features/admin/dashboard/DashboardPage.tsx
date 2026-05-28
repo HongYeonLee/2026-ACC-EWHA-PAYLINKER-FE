@@ -66,19 +66,14 @@ export function DashboardPage() {
               : '발송 현황과 확인이 필요한 항목을 한눈에 살펴보세요.'}
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-3">
-          <span className="hidden num text-[12px] text-ink-4 sm:block">
-            {formatDate(new Date().toISOString())}
-          </span>
-          <Link to="/admin/campaigns/new">
-            <button
-              type="button"
-              className="inline-flex h-9 items-center gap-2 rounded-md bg-mint-500 px-4 text-[12.5px] font-medium text-navy-900 shadow-sm transition hover:bg-mint-400"
-            >
-              <Icon.Plus size={14} />새 발송
-            </button>
-          </Link>
-        </div>
+        <Link to="/admin/campaigns/new">
+          <button
+            type="button"
+            className="inline-flex h-9 items-center gap-2 rounded-md bg-navy-700 px-4 text-[12.5px] font-medium text-white shadow-sm transition hover:bg-navy-600"
+          >
+            <Icon.Plus size={14} />새 발송
+          </button>
+        </Link>
       </div>
 
       <ApiBadgeGroup>

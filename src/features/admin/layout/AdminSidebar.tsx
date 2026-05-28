@@ -69,19 +69,22 @@ export function AdminSidebar({ onClose }: { onClose?: () => void }) {
                     : location.pathname.startsWith(item.to);
                 const Ico = Icon[item.icon];
                 return (
-                  <li key={item.to}>
+                  <li key={item.to} className="relative">
+                    {isActive && (
+                      <span className="pointer-events-none absolute left-0 top-1/2 h-6 w-[3px] -translate-y-1/2 rounded-r-full bg-mint-400" />
+                    )}
                     <NavLink
                       to={item.to}
                       end={item.to === '/admin'}
                       onClick={onClose}
                       className={cn(
-                        'flex items-center gap-3 rounded-md px-3 py-3 text-[13px] transition',
+                        'flex items-center gap-3 rounded-md px-3 py-2.5 text-[13px] transition',
                         isActive
-                          ? 'bg-mint-500/15 text-mint-300'
+                          ? 'bg-mint-500/20 font-medium text-mint-300'
                           : 'text-[var(--color-sidebar-text)] hover:bg-white/[0.04] hover:text-[var(--color-sidebar-text-strong)]',
                       )}
                     >
-                      <Ico size={17} />
+                      <Ico size={16} />
                       <span className="flex-1">{item.label}</span>
                     </NavLink>
                   </li>
