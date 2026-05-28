@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { campaignApi } from './api';
@@ -39,34 +39,19 @@ const STATUS_FILTERS: Array<{ value: 'ALL' | CampaignStatus; label: string }> = 
   { value: 'CANCELLED', label: CAMPAIGN_STATUS_LABEL.CANCELLED },
 ];
 
-const SORT_OPTIONS = [
-  { value: 'createdAt:desc', label: '최신순' },
-  { value: 'createdAt:asc', label: '오래된순' },
-  { value: 'sendCompletedAt:desc', label: '발송일 최신순' },
-  { value: 'totalRecipientCount:desc', label: '대상자 많은순' },
-] as const;
-
 export function CampaignListPage() {
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState<'ALL' | CampaignStatus>('ALL');
   const [keyword, setKeyword] = useState('');
-  const [debouncedKeyword, setDebouncedKeyword] = useState('');
-  const [sort, setSort] = useState<string>('createdAt:desc');
-
-  useEffect(() => {
-    const id = setTimeout(() => setDebouncedKeyword(keyword), 300);
-    return () => clearTimeout(id);
-  }, [keyword]);
 
   const { data, isLoading } = useQuery({
-    queryKey: ['campaigns', { page, status, keyword: debouncedKeyword, sort }],
+    queryKey: ['campaigns', { page, status, keyword }],
     queryFn: () =>
       campaignApi.list({
         page,
         pageSize: PAGE_SIZE,
         status: status === 'ALL' ? undefined : status,
-        keyword: debouncedKeyword || undefined,
-        sort,
+        keyword: keyword || undefined,
       }),
   });
 
@@ -100,20 +85,6 @@ export function CampaignListPage() {
                 iconLeft={<Icon.Search size={14} />}
               />
             </div>
-            <select
-              value={sort}
-              onChange={(e) => {
-                setSort(e.target.value);
-                setPage(1);
-              }}
-              className="h-9 rounded-md border border-border-strong bg-white px-2.5 text-[12.5px] text-ink-2 outline-none transition focus:border-mint-500"
-            >
-              {SORT_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
           </div>
           <Pill
             items={STATUS_FILTERS}

@@ -50,16 +50,8 @@ export function DashboardPage() {
 
   const summaryQuery = useQuery({ queryKey: ['dashboard', 'summary'], queryFn: dashboardApi.summary });
   const summary = summaryQuery.data;
-  const firstCampaign = summary?.recentCampaigns[0];
-  const focusId = firstCampaign?.campaignId;
-
-  // STA-002: 단일 캠페인 정확한 수치
-  const campaignSummaryQuery = useQuery({
-    queryKey: ['dashboard', 'campaign-summary', focusId],
-    queryFn: () => dashboardApi.campaignSummary(focusId!),
-    enabled: !!focusId,
-  });
-  const focusCampaign = campaignSummaryQuery.data ?? firstCampaign;
+  const focusCampaign = summary?.recentCampaigns[0];
+  const focusId = focusCampaign?.campaignId;
 
   const unviewedQuery = useQuery({
     queryKey: ['dashboard', 'unviewed', focusId],

@@ -1,33 +1,12 @@
-import { useEffect, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
 import { PageHeader } from '../common/PageHeader';
 import { ApiBadge, Badge, Button, Card, CardBody, CardHeader, Field, Icon, Input, toast } from '../../../shared/ui';
 import { useAuthStore } from '../../../shared/stores/auth.store';
-import { authApi } from '../../auth/api';
 
 export function SettingsPage() {
   const profile = useAuthStore((s) => s.adminProfile);
   const setAdminProfile = useAuthStore((s) => s.setAdminProfile);
   const [name, setName] = useState(profile?.name ?? '');
-
-  const meQuery = useQuery({
-    queryKey: ['users', 'me'],
-    queryFn: authApi.me,
-    staleTime: 5 * 60 * 1000,
-  });
-
-  useEffect(() => {
-    if (meQuery.data) {
-      setAdminProfile({
-        adminId: meQuery.data.adminId,
-        email: meQuery.data.email,
-        name: meQuery.data.name,
-        role: meQuery.data.role,
-        createdAt: meQuery.data.createdAt,
-      });
-      setName(meQuery.data.name);
-    }
-  }, [meQuery.data, setAdminProfile]);
   const [defaultTtl, setDefaultTtl] = useState(48);
   const [defaultResend, setDefaultResend] = useState(1);
 
@@ -108,7 +87,11 @@ export function SettingsPage() {
                 onChange={(e) => setDefaultResend(Number(e.target.value) || 1)}
               />
             </Field>
-            <Button size="sm" variant="secondary" disabled>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => toast.info('데모 환경 안내', '본 설정은 데모용입니다. 실제 저장은 백엔드 연동 후 활성화됩니다.')}
+            >
               저장
             </Button>
           </CardBody>
